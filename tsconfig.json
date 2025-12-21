@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "lib": ["ESNext", "DOM"],
+    "moduleResolution": "node",
+    "strict": true,
+    "sourceMap": true,
+    "resolveJsonModule": true,
+    "esModuleInterop": true,
+    "noEmit": true,
+    "noUnusedLocals": false,
+    "useDefineForClassFields": false,
+    "noImplicitReturns": false,
+    "experimentalDecorators": true, 
+    "emitDecoratorMetadata": true,
+    "skipLibCheck": true,
+    "baseUrl": ".",
+    "paths": {
+      "@fusion-map/core": ["packages/core/src/index.ts"],
+      "@fusion-map/core/*": ["packages/core/src/*"]
+    }
+  },
+  "exclude": ["node_modules", "dist"]
+}

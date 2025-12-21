@@ -1,0 +1,12 @@
+{
+  "name": "fusion-map-monorepo",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "examples/*"
+  ],
+  "scripts": {
+    "dev": "yarn workspace @fusion-map/demo dev",
+    "build": "yarn workspace @fusion-map/core build"
+  }
+}

@@ -1,18 +1,18 @@
-# Easy Map (easy-map)
+# Fusion Map (fusion-map)
 
-[English](./README.md) | [简体中文](./README_zh-CN.md)
+[English](./README.md) | [简体中文](./README_zh-CN.md) | [Live Demo](https://easy-map.tanxin.link/index.html)
 
-**Easy Map** is a powerful unified mapping library that seamlessly bridges **MapLibre GL JS** with major global map providers, including **Google Maps**, **Cesium (3D Globe)**, **Amap (Gaode)**, **Baidu Map**, and **Tianditu**.
+**Fusion Map** is a powerful unified mapping library that seamlessly bridges **MapLibre GL JS** with major global map providers, including **Google Maps**, **Cesium (3D Globe)**, **Amap (Gaode)**, **Baidu Map**, and **Tianditu**.
 
 It allows you to overlay MapLibre's high-performance vector rendering and styling capabilities on top of third-party base maps, maintaining perfect synchronization of camera state (Zoom, Pitch, Bearing, Center).
 
 ## 💡 Core Philosophy: Write Once, Run Everywhere
 
-**Easy Map** employs a decoupled architecture where MapLibre acts as a **transparent interaction layer** over the native base map. 
+**Fusion Map** employs a decoupled architecture where MapLibre acts as a **transparent interaction layer** over the native base map. 
 
 ```mermaid
 graph TD
-    User["Your Application Code"] --> MapLibre["EasyMap (MapLibre Interface)"]
+    User["Your Application Code"] --> MapLibre["Fusion Map (MapLibre Interface)"]
     MapLibre --> SyncEngine["Sync Engine"]
     
     subgraph "Provider Adapters"

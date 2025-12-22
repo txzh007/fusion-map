@@ -1,9 +1,29 @@
 {
-  "name": "easy-map",
+  "name": "fusion-map",
   "version": "1.0.0",
-  "main": "src/index.ts",
-  "module": "src/index.ts",
+  "description": "A unified adapter seamlessly bridging MapLibre GL JS with Google Maps, Cesium, Amap, and Baidu.",
+  "main": "dist/index.umd.js",
+  "module": "dist/index.mjs",
   "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "author": "txzh007",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/txzh007/fusion-map.git"
+  },
+  "keywords": [
+    "maplibre",
+    "cesium",
+    "google-maps",
+    "amap",
+    "baidu",
+    "visualization",
+    "webgl",
+    "gis"
+  ],
   "scripts": {
     "build": "vite build",
     "dev": "vite build --watch"

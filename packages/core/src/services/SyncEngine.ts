@@ -1,6 +1,6 @@
 import maplibregl from 'maplibre-gl';
 import gcoord from 'gcoord';
-import { MapService, Decorators, Watch, AutoBind, Inject, WATCH_METADATA_KEY, WatchMetadata } from '../decorators';
+import { MapService, Watch, AutoBind, Inject, WATCH_METADATA_KEY, WatchMetadata } from '../decorators';
 import { BaseMapProvider } from './BaseMapProvider';
 
 @MapService()

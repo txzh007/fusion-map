@@ -102,7 +102,7 @@
 
 <script setup lang="ts">
 import { onMounted, ref, reactive, watch } from 'vue';
-import { createFusionMap, FusionMap } from '@fusion-map/core';
+import { createFusionMap, FusionMap } from 'fusion-map';
 
 const storedMap = 'tianditu'; // Force start with Tianditu
 const currentMap = ref<'amap' | 'baidu' | 'cesium' | 'tianditu' | 'google'>(storedMap);

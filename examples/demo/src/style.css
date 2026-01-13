@@ -1,8 +1,105 @@
+:root {
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
 body, html, #app {
   margin: 0;
   padding: 0;
   width: 100%;
   height: 100%;
-  font-family: 'Segoe UI', sans-serif;
+  font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+  background: radial-gradient(circle at 10% 20%, rgba(59, 130, 246, 0.1), transparent 25%),
+              radial-gradient(circle at 90% 10%, rgba(16, 185, 129, 0.12), transparent 25%),
+              #0b1220;
+  color: #e5e7eb;
   overflow: hidden;
+}
+
+.app-shell {
+  display: grid;
+  grid-template-columns: 280px 1fr 380px;
+  gap: 16px;
+  padding: 16px;
+  height: 100vh;
+  width: 100vw;
+}
+
+.panel {
+  background: rgba(15, 23, 42, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 14px;
+  padding: 14px;
+  backdrop-filter: blur(10px);
+  color: #e5e7eb;
+}
+
+.nav-panel {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.nav-item:hover {
+  background: rgba(59, 130, 246, 0.12);
+}
+
+.map-stage {
+  position: relative;
+  border-radius: 18px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: #0b1220;
+}
+
+.map-canvas {
+  width: 100%;
+  height: 100%;
+}
+
+.map-floating {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  display: flex;
+  align-items: center;
+}
+
+.badge-row {
+  background: rgba(15, 23, 42, 0.8);
+  padding: 6px 8px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(8px);
+}
+
+.inspector-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+}
+
+@media (max-width: 1200px) {
+  .app-shell {
+    grid-template-columns: 240px 1fr;
+    grid-template-rows: 1fr 340px;
+    grid-template-areas:
+      "nav map"
+      "inspect inspect";
+  }
+
+  .nav-panel { grid-area: nav; }
+  .map-stage { grid-area: map; }
+  .inspector-panel { grid-area: inspect; }
+}
+
+@media (max-width: 900px) {
+  .app-shell {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr auto;
+  }
 }

@@ -5,6 +5,8 @@
     "lib": ["ESNext", "DOM"],
     "moduleResolution": "node",
     "strict": true,
+    "jsx": "react-jsx",
+    "ignoreDeprecations": "6.0",
     "sourceMap": true,
     "resolveJsonModule": true,
     "esModuleInterop": true,
@@ -15,11 +17,13 @@
     "experimentalDecorators": true, 
     "emitDecoratorMetadata": true,
     "skipLibCheck": true,
-    "baseUrl": ".",
-    "paths": {
-      "@fusion-map/core": ["packages/core/src/index.ts"],
-      "@fusion-map/core/*": ["packages/core/src/*"]
-    }
+    "typeRoots": [
+      "./types",
+      "./node_modules/@types"
+    ]
   },
+  "references": [
+    { "path": "./packages/core" }
+  ],
   "exclude": ["node_modules", "dist"]
 }

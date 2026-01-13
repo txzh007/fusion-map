@@ -16,6 +16,7 @@ export interface FusionMapConfig {
     cesium?: string;
     tianditu?: string;
     google?: string;
+    googleMapId?: string;
   };
 }
 
@@ -259,6 +260,20 @@ export class FusionMap {
     this.map.setMaxPitch(60); // Restore default max pitch
     this.map.dragRotate.enable();
     this.map.touchZoomRotate.enableRotation();
+  }
+
+  // 访问底层 MapLibre 实例（只读）
+  getMapInstance() {
+    return this.map;
+  }
+
+  // 销毁地图实例并清理容器
+  destroy() {
+    try {
+      this.map?.remove();
+    } catch (e) {
+      console.warn('[FusionMap] destroy failed', e);
+    }
   }
 }
 

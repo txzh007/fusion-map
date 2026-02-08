@@ -1,46 +1,94 @@
 import 'reflect-metadata';
-import { Container, Constructor } from '../di/Container';
+import { Container, Constructor, Lifetime } from '../di/Container';
 
-// === 1. @MapService: 标记为单例服务 ===
-export function MapService() {
+// === 1. @MapService: 标记并注册为服务 ===
+export interface MapServiceOptions {
+  lifetime?: Lifetime;
+  factory?: (...args: any[]) => any;
+  dependencies?: any[];
+}
+
+export function MapService(options?: MapServiceOptions) {
   return function <T extends Constructor>(target: T) {
-    // 这里可以做一些注册逻辑，目前主要用于语义标记
-    // 实际实例化由 Container.get 懒加载处理
+    // 自动注册到容器
+    Container.register(target, {
+      lifetime: options?.lifetime || Lifetime.Singleton,
+      factory: options?.factory,
+      dependencies: options?.dependencies
+    });
+    
+    // 添加元数据标记
+    Reflect.defineMetadata('isMapService', true, target);
   };
 }
 
 // === 2. @Inject: 属性注入 ===
-export function Inject(serviceIdentifier?: Constructor | (() => Constructor)) {
+export interface InjectOptions {
+  optional?: boolean;
+  defaultValue?: any;
+}
+
+export function Inject(
+  serviceIdentifier?: Constructor | (() => Constructor),
+  options?: InjectOptions
+) {
   return function (target: any, propertyKey: string) {
-    // 此时不立即解析 type，因为如果是 thunk，此时可能还没准备好
-    // 我们在 getter 运行时再解析
-    
+    const injectMetadata = {
+      serviceIdentifier,
+      options,
+      propertyKey,
+      targetConstructor: target.constructor
+    };
+
+    // 保存注入元数据
+    const existingInjections = Reflect.getMetadata('injections', target) || [];
+    existingInjections.push(injectMetadata);
+    Reflect.defineMetadata('injections', existingInjections, target);
+
+    // 创建 getter
     Object.defineProperty(target, propertyKey, {
       get: () => {
         let type: Constructor | undefined;
-        
-        if (typeof serviceIdentifier === 'function' && !serviceIdentifier.prototype) {
-          // It's a thunk / arrow function () => Class
-          try {
-            type = (serviceIdentifier as () => Constructor)();
-          } catch(e) {
-            console.error(`[Inject] Failed to resolve thunk for ${propertyKey}.`, e);
-          }
-        } else if (serviceIdentifier) {
-          type = serviceIdentifier as Constructor;
-        } else {
-           // Fallback to metadata
-           type = Reflect.getMetadata('design:type', target, propertyKey);
-        }
 
-        if (!type) {
-          console.error(`[Inject] Metadata/Identifier not found for ${propertyKey}.`);
-          throw new Error(`Cannot resolve dependency for ${propertyKey}`);
+        try {
+          if (typeof serviceIdentifier === 'function' && !serviceIdentifier.prototype) {
+            // 处理 thunk: () => Class
+            type = (serviceIdentifier as () => Constructor)();
+          } else if (serviceIdentifier) {
+            type = serviceIdentifier as Constructor;
+          } else {
+            // 回退到元数据
+            type = Reflect.getMetadata('design:type', target, propertyKey);
+          }
+
+          if (!type) {
+            if (options?.optional) {
+              return options.defaultValue;
+            }
+            console.error(`[Inject] Cannot resolve type for ${propertyKey} in ${target.constructor.name}`);
+            throw new Error(`Cannot resolve dependency for ${propertyKey}`);
+          }
+
+          return Container.get(type);
+        } catch (error) {
+          if (options?.optional) {
+            return options.defaultValue;
+          }
+          console.error(`[Inject] Failed to inject ${propertyKey} in ${target.constructor.name}:`, error);
+          throw error;
         }
-        return Container.get(type);
+      },
+      set: (value: any) => {
+        // 允许手动设置值
+        Object.defineProperty(target, propertyKey, {
+          value,
+          writable: true,
+          enumerable: true,
+          configurable: true
+        });
       },
       enumerable: true,
-      configurable: true,
+      configurable: true
     });
   };
 }
@@ -56,10 +104,10 @@ export function AutoBind(target: any, propertyKey: string, descriptor: PropertyD
       Object.defineProperty(this, propertyKey, {
         value: boundFn,
         configurable: true,
-        writable: true,
+        writable: true
       });
       return boundFn;
-    },
+    }
   };
 }
 
@@ -77,7 +125,7 @@ export function Watch(event: string) {
     const watchers: WatchMetadata[] = Reflect.getMetadata(WATCH_METADATA_KEY, target) || [];
     watchers.push({
       eventName: event,
-      methodName: propertyKey,
+      methodName: propertyKey
     });
     Reflect.defineMetadata(WATCH_METADATA_KEY, watchers, target);
   };

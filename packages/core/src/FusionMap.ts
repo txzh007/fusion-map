@@ -1,24 +1,17 @@
 import maplibregl from 'maplibre-gl';
 import { MapService, Inject } from './decorators';
 import { SyncEngine } from './services/SyncEngine';
-import { BaseMapProvider, MapType } from './services/BaseMapProvider';
-import { Container } from './di/Container';
+import { BaseMapProvider, type MapType } from './services/BaseMapProvider';
+import type { FusionMapConfig, MapLoadingState, GenericEventOn } from './types';
+import {
+  ErrorCode,
+  createContainerNotFoundError,
+  normalizeError,
+  type MapError
+} from './errors';
+import { Subject } from 'rxjs';
 
 import 'maplibre-gl/dist/maplibre-gl.css';
-
-// 导出接口定义
-// 导出接口定义
-export interface FusionMapConfig {
-  mapOptions?: Partial<maplibregl.MapOptions>;
-  tokens?: {
-    amap?: string;
-    baidu?: string;
-    cesium?: string;
-    tianditu?: string;
-    google?: string;
-    googleMapId?: string;
-  };
-}
 
 @MapService()
 export class FusionMap {
@@ -30,7 +23,24 @@ export class FusionMap {
   @Inject(() => BaseMapProvider)
   private baseMapProvider!: BaseMapProvider;
 
+  // Error and loading state subjects
+  private errorSubject = new Subject<MapError>();
+  private loadingSubject = new Subject<MapLoadingState>();
+
+  // Public observables
+  public errors$ = this.errorSubject.asObservable();
+  public loading$ = this.loadingSubject.asObservable();
+
   constructor(private containerId: string, options: FusionMapConfig = {}) {
+    // Subscribe to BaseMapProvider errors and loading states
+    this.baseMapProvider.errors$.subscribe((error) => {
+      this.errorSubject.next(error);
+    });
+
+    this.baseMapProvider.loading$.subscribe((state) => {
+      this.loadingSubject.next(state);
+    });
+
     this.init(containerId, options);
   }
 
@@ -44,7 +54,16 @@ export class FusionMap {
 
     // 1. 创建容器结构：底层放 BaseMap，上层放 MapLibre
     const root = document.getElementById(containerId);
-    if (!root) throw new Error(`Container ${containerId} not found`);
+    if (!root) {
+      const error = createContainerNotFoundError(containerId);
+      this.errorSubject.next({
+        type: 'amap',
+        message: error.message,
+        error,
+        timestamp: Date.now()
+      });
+      throw error;
+    }
 
     root.style.position = 'relative';
 
@@ -69,21 +88,23 @@ export class FusionMap {
 
     // 2. 初始化 MapLibre
     const mapOpts = options.mapOptions || {};
-    
+
     this.map = new maplibregl.Map({
       container: topContainer.id,
       style: {
         version: 8,
         sources: {},
         layers: [],
-        projection: { type: 'globe' } as any,
+        // @ts-ignore - MapLibre 类型定义中缺少 projection 属性
+        projection: { type: 'globe' }
       },
       center: [116.3974, 39.9093],
       zoom: 2,
       minZoom: 2,
       maxZoom: 22,
       ...mapOpts
-    } as maplibregl.MapOptions & { projection?: any });
+    // @ts-ignore - projection 未在 MapOptions 类型中定义
+    } as maplibregl.MapOptions & { projection?: { type: 'globe' | 'mercator' } });
 
     this.map.on('zoom', () => {
       this.updatePitchLimits();
@@ -91,23 +112,55 @@ export class FusionMap {
 
     this.map.on('load', () => {
       // Tianditu Base Map (Standard Vector)
-      // Note: Requires a valid TK (Token). 
+      // Note: Requires a valid TK (Token).
       // Please replace 'YOUR_TIANDITU_KEY' with your actual key if needed, or use a working one if provided.
       const tdtToken = options.tokens?.tianditu || 'YOUR_TIANDITU_KEY';
       if (tdtToken === 'YOUR_TIANDITU_KEY') {
-        console.warn('[FusionMap] Tianditu Token is missing or default. Map tiles may not load, making the globe invisible.');
+        console.warn(
+          '[FusionMap] Tianditu Token is missing or default. ' +
+          'Map tiles may not load, making the globe invisible.'
+        );
       }
 
       // Generate t0-t7 subdomains
       const subdomains = ['0', '1', '2', '3', '4', '5', '6', '7'];
 
-      const vecTiles = subdomains.map(s =>
-        `https://t${s}.tianditu.gov.cn/vec_w/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=vec&STYLE=default&TILEMATRIXSET=w&FORMAT=tiles&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&tk=${tdtToken}`
-      );
+      const vecTiles = subdomains.map((s) => {
+        const baseUrl = `https://t${s}.tianditu.gov.cn/vec_w/wmts`;
+        const params = new URLSearchParams({
+          SERVICE: 'WMTS',
+          REQUEST: 'GetTile',
+          VERSION: '1.0.0',
+          LAYER: 'vec',
+          STYLE: 'default',
+          TILEMATRIXSET: 'w',
+          FORMAT: 'tiles',
+          TILEMATRIX: '{z}',
+          TILEROW: '{y}',
+          TILECOL: '{x}',
+          tk: tdtToken
+        });
+        return `${baseUrl}?${params.toString()}`;
+      });
 
-      const cvaTiles = subdomains.map(s =>
-        `https://t${s}.tianditu.gov.cn/cva_w/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=cva&STYLE=default&TILEMATRIXSET=w&FORMAT=tiles&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&tk=${tdtToken}`
-      );
+      // cvaTiles 未使用，已被注释
+      // const cvaTiles = subdomains.map((s) => {
+      //   const baseUrl = `https://t${s}.tianditu.gov.cn/cva_w/wmts`;
+      //   const params = new URLSearchParams({
+      //     SERVICE: 'WMTS',
+      //     REQUEST: 'GetTile',
+      //     VERSION: '1.0.0',
+      //     LAYER: 'cva',
+      //     STYLE: 'default',
+      //     TILEMATRIXSET: 'w',
+      //     FORMAT: 'tiles',
+      //     TILEMATRIX: '{z}',
+      //     TILEROW: '{y}',
+      //     TILECOL: '{x}',
+      //     tk: tdtToken
+      //   });
+      //   return `${baseUrl}?${params.toString()}`;
+      // });
 
       this.map.addSource('tianditu-vec', {
         type: 'raster',
@@ -139,8 +192,6 @@ export class FusionMap {
       //   paint: {}
       // });
 
-
-
     });
 
     // 3. 启动同步引擎
@@ -166,7 +217,7 @@ export class FusionMap {
   }
 
   private updatePitchLimits() {
-    if (!this.map) return;
+    if (!this.map) {return;}
 
     // Check current projection
     // @ts-ignore
@@ -191,12 +242,17 @@ export class FusionMap {
     this.map.setMaxPitch(maxPitch);
   }
 
-  // 暴露事件监听
-  on(type: string, listener: (ev: any) => void) {
+  /**
+   * 暴露事件监听
+   * @param type - 事件类型
+   * @param listener - 事件监听器
+   */
+  on: GenericEventOn = (type, listener) => {
     if (this.map) {
+      // @ts-ignore - MapLibre 的类型定义不够灵活，允许任意事件监听器
       this.map.on(type, listener);
     }
-  }
+  };
 
   setCesiumScaleFactor(factor: number) {
     this.baseMapProvider.setCesiumScaleFactor(factor);
@@ -212,8 +268,24 @@ export class FusionMap {
   }
 
   switchBaseMap(type: MapType) {
+    this.loadingSubject.next({ type, loading: true });
+
     if (!this.map) {
-      this.baseMapProvider.switchMap(type);
+      this.baseMapProvider.switchMap(type)
+        .then(() => {
+          this.loadingSubject.next({ type, loading: false });
+          return void 0; // 满足 ESLint promise/always-return 规则
+        })
+        .catch((error) => {
+          this.loadingSubject.next({ type, loading: false });
+          const normalizedError = normalizeError(error);
+          this.errorSubject.next({
+            type,
+            message: `切换到 ${type} 失败: ${normalizedError.message}`,
+            error: normalizedError.code ? normalizedError : undefined,
+            timestamp: Date.now()
+          });
+        });
       return;
     }
 
@@ -225,35 +297,49 @@ export class FusionMap {
       bearing: this.map.getBearing()
     };
 
-    this.baseMapProvider.switchMap(type, state);
-    this.setProjection('mercator');
+    this.baseMapProvider.switchMap(type, state).then(() => {
+      this.loadingSubject.next({ type, loading: false });
+      this.setProjection('mercator');
 
-    // Auto-switch projection
-    if (type === 'cesium') {
-      this.setProjection('globe');
-      if (this.map.getLayer('tianditu-base')) {
-        this.map.setLayoutProperty('tianditu-base', 'visibility', 'none');
+      // Auto-switch projection
+      if (type === 'cesium') {
+        this.setProjection('globe');
+        if (this.map.getLayer('tianditu-base')) {
+          this.map.setLayoutProperty('tianditu-base', 'visibility', 'none');
+        }
+        this.enableInteractions();
+      } else if (type === 'tianditu') {
+        this.setProjection('mercator');
+        if (this.map.getLayer('tianditu-base')) {
+          this.map.setLayoutProperty('tianditu-base', 'visibility', 'visible');
+        }
+        this.enableInteractions();
+      } else if (type === 'google') {
+        this.setProjection('mercator');
+        if (this.map.getLayer('tianditu-base')) {
+          this.map.setLayoutProperty('tianditu-base', 'visibility', 'none');
+        }
+        this.enableInteractions();
+      } else {
+        this.setProjection('mercator');
+        if (this.map.getLayer('tianditu-base')) {
+          this.map.setLayoutProperty('tianditu-base', 'visibility', 'none');
+        }
+        this.enableInteractions();
       }
-      this.enableInteractions();
-    } else if (type === 'tianditu') {
-      this.setProjection('mercator');
-      if (this.map.getLayer('tianditu-base')) {
-        this.map.setLayoutProperty('tianditu-base', 'visibility', 'visible');
-      }
-      this.enableInteractions();
-    } else if (type === 'google') {
-      this.setProjection('mercator');
-      if (this.map.getLayer('tianditu-base')) {
-        this.map.setLayoutProperty('tianditu-base', 'visibility', 'none');
-      }
-      this.enableInteractions();
-    } else {
-      this.setProjection('mercator');
-      if (this.map.getLayer('tianditu-base')) {
-        this.map.setLayoutProperty('tianditu-base', 'visibility', 'none');
-      }
-      this.enableInteractions();
-    }
+      return void 0; // 满足 ESLint promise/always-return 规则
+    }).catch((error) => {
+      this.loadingSubject.next({ type, loading: false });
+      const normalizedError = normalizeError(error);
+      this.errorSubject.next({
+        type,
+        message: `切换到 ${type} 失败: ${normalizedError.message}`,
+        error: normalizedError.code ? normalizedError : undefined,
+        timestamp: Date.now()
+      });
+      // Re-throw the error so the caller can handle it
+      throw error;
+    });
   }
 
   private enableInteractions() {
@@ -267,12 +353,24 @@ export class FusionMap {
     return this.map;
   }
 
-  // 销毁地图实例并清理容器
+  /**
+   * 销毁地图实例并清理容器
+   */
   destroy() {
     try {
       this.map?.remove();
+      this.baseMapProvider.reset();
+      this.errorSubject.complete();
+      this.loadingSubject.complete();
     } catch (e) {
-      console.warn('[FusionMap] destroy failed', e);
+      const error = normalizeError(e);
+      console.warn('[FusionMap] destroy failed:', error.getDetailedMessage());
+      this.errorSubject.next({
+        type: 'amap',
+        message: '销毁地图失败',
+        error: error.code ? error : undefined,
+        timestamp: Date.now()
+      });
     }
   }
 }

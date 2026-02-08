@@ -1,16 +1,65 @@
 import gcoord from 'gcoord';
 import { MapService } from '../decorators';
+import { Subject } from 'rxjs';
+import type { MapInstances } from '../types';
+import {
+  ErrorCode,
+  createTokenMissingError,
+  createScriptLoadError,
+  createMapLoadError,
+  normalizeError,
+  type MapError as ExternalMapError
+} from '../errors';
 
 export type MapType = 'amap' | 'baidu' | 'cesium' | 'tianditu' | 'google';
+
+/**
+ * 地图错误信息（内部使用）
+ */
+export interface MapError {
+  type: MapType;
+  message: string;
+  error?: Error;
+  timestamp: number;
+}
+
+export interface MapLoadingState {
+  type: MapType;
+  loading: boolean;
+  progress?: number;
+}
 
 @MapService()
 export class BaseMapProvider {
   private activeMapType: MapType = 'amap';
   private container: HTMLElement | null = null;
-  private viewer: any = null; // Cesium Viewer
+  private viewer: unknown = null; // Cesium Viewer
   private tokens: { amap?: string; baidu?: string; cesium?: string; google?: string; tianditu?: string; googleMapId?: string; } = {};
   private cesiumCalibrationFactor: number = 1.9;
   private genericZoomOffset: number = 0; // Dynamic offset for calibration
+
+  // Store instances internally instead of on window
+  private instances: Partial<MapInstances> = {
+    amap: null,
+    baidu: null,
+    cesium: null,
+    google: null
+  };
+
+  // Error and loading state subjects
+  private errorSubject = new Subject<MapError>();
+  private loadingSubject = new Subject<MapLoadingState>();
+
+  // Public observables
+  public errors$ = this.errorSubject.asObservable();
+  public loading$ = this.loadingSubject.asObservable();
+
+  // Track loading scripts to prevent duplicates
+  private loadingScripts = new Map<string, Promise<void>>();
+
+  // Track retry attempts
+  private retryAttempts = new Map<string, number>();
+  private maxRetries = 3;
 
   setContainer(element: HTMLElement) {
     this.container = element;
@@ -40,11 +89,18 @@ export class BaseMapProvider {
   // === Camera Sync Logic ===
 
   updateCamera(view: { center: [number, number]; zoom: number; pitch: number; bearing: number }) {
-    if (!this.container) return;
+    if (!this.container) {
+      this.errorSubject.next({
+        type: this.activeMapType,
+        message: '容器未设置',
+        timestamp: Date.now()
+      });
+      return;
+    }
     this.lastView = view;
 
     if (this.activeMapType === 'amap') {
-      const amap = (window as any).amapInstance;
+      const amap = this.instances.amap;
       if (amap) {
         // Transform WGS84 -> GCJ02
         const gcj = gcoord.transform(view.center, gcoord.WGS84, gcoord.GCJ02);
@@ -55,7 +111,7 @@ export class BaseMapProvider {
         amap.setRotation(-view.bearing, true);
       }
     } else if (this.activeMapType === 'baidu') {
-      const bmap = (window as any).bmapGLInstance;
+      const bmap = this.instances.baidu;
       if (bmap) {
         const BMapGL = (window as any).BMapGL;
         // Transform WGS84 -> BD09
@@ -69,7 +125,7 @@ export class BaseMapProvider {
         bmap.setCenter(point, { noAnimation: true });
       }
     } else if (this.activeMapType === 'cesium') {
-      const viewer = (window as any).cesiumViewer;
+      const viewer = this.instances.cesium;
       if (viewer) {
         const Cesium = (window as any).Cesium;
 
@@ -90,7 +146,7 @@ export class BaseMapProvider {
         viewer.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
       }
     } else if (this.activeMapType === 'google') {
-      const map = (window as any).googleMapInstance;
+      const map = this.instances.google;
       if (map) {
         // Sync Google Maps
         // MapLibre vs Google scale.
@@ -155,13 +211,21 @@ export class BaseMapProvider {
     if (this.container) {
       this.container.innerHTML = '';
       // 如果有之前的实例需要销毁
-      if ((window as any).amapInstance) {
-        (window as any).amapInstance.destroy();
-        (window as any).amapInstance = null;
+      if (this.instances.amap) {
+        this.instances.amap.destroy();
+        this.instances.amap = null;
       }
       // Baidu logic usually just needs DOM clear, but good to nullify
-      if ((window as any).bmapGLInstance) {
-        (window as any).bmapGLInstance = null;
+      if (this.instances.baidu) {
+        this.instances.baidu = null;
+      }
+      // Cesium cleanup
+      if (this.instances.cesium) {
+        this.instances.cesium = null;
+      }
+      // Google cleanup
+      if (this.instances.google) {
+        this.instances.google = null;
       }
     }
 
@@ -179,26 +243,79 @@ export class BaseMapProvider {
 
   // 动态加载脚本助手
   private loadScript(src: string): Promise<void> {
-    return new Promise((resolve, reject) => {
-      if (document.querySelector(`script[src="${src}"]`)) {
-        resolve(); // 已经加载过
-        return;
-      }
-      const script = document.createElement('script');
-      script.src = src;
-      script.onload = () => resolve();
-      script.onerror = reject;
-      document.head.appendChild(script);
+    // 检查是否已经在加载中
+    if (this.loadingScripts.has(src)) {
+      return this.loadingScripts.get(src)!;
+    }
+
+    // 检查是否已经加载过
+    if (document.querySelector(`script[src="${src}"]`)) {
+      return Promise.resolve();
+    }
+
+    const promise = new Promise<void>((resolve, reject) => {
+      const attemptLoad = (retryCount: number = 0) => {
+        const script = document.createElement('script');
+        script.src = src;
+        script.onload = () => {
+          this.loadingScripts.delete(src);
+          this.retryAttempts.delete(src);
+          resolve();
+        };
+        script.onerror = (error) => {
+          this.loadingScripts.delete(src);
+
+          // 重试逻辑
+          if (retryCount < this.maxRetries) {
+            console.warn(`[BaseMapProvider] 脚本加载失败，重试 ${retryCount + 1}/${this.maxRetries}: ${src}`);
+            setTimeout(() => attemptLoad(retryCount + 1), 1000 * (retryCount + 1));
+          } else {
+            const errorMsg = `脚本加载失败: ${src}`;
+            this.errorSubject.next({
+              type: this.activeMapType,
+              message: errorMsg,
+              error: error instanceof Error ? error : new Error(String(error)),
+              timestamp: Date.now()
+            });
+            reject(new Error(errorMsg));
+          }
+        };
+        document.head.appendChild(script);
+      };
+
+      attemptLoad();
     });
+
+    this.loadingScripts.set(src, promise);
+    return promise;
   }
 
   private async loadAmap(view?: { center: [number, number]; zoom: number; pitch: number; bearing: number }) {
-    if (!this.container) return;
+    if (!this.container) {
+      const error = normalizeError('Container not set');
+      this.errorSubject.next({
+        type: 'amap',
+        message: '容器未设置',
+        error: error.code ? error : undefined,
+        timestamp: Date.now()
+      });
+      return;
+    }
+
     const key = this.tokens.amap;
     if (!key) {
+      const error = createTokenMissingError('Amap');
+      this.errorSubject.next({
+        type: 'amap',
+        message: error.message,
+        error: error.code ? error : undefined,
+        timestamp: Date.now()
+      });
       this.renderError('Please provide Amap Key (JS API)', 'amap');
       return;
     }
+
+    this.loadingSubject.next({ type: 'amap', loading: true });
 
     try {
       // 1. 加载 JSAPI Loader (或者直接加载 API)
@@ -246,22 +363,46 @@ export class BaseMapProvider {
         pitch: pitch,
         rotation: rotation
       });
-      (window as any).amapInstance = map;
+      this.instances.amap = map;
       console.log('[BaseMapProvider] Amap loaded.');
+      this.loadingSubject.next({ type: 'amap', loading: false });
 
     } catch (e) {
       console.error('Failed to load Amap', e);
+      this.loadingSubject.next({ type: 'amap', loading: false });
+      const error = e instanceof Error ? e : new Error(String(e));
+      this.errorSubject.next({
+        type: 'amap',
+        message: '高德地图加载失败',
+        error,
+        timestamp: Date.now()
+      });
       this.renderError('Failed to load Amap SDK');
     }
   }
 
   private async loadBaidu(view?: { center: [number, number]; zoom: number; pitch: number; bearing: number }) {
-    if (!this.container) return;
+    if (!this.container) {
+      this.errorSubject.next({
+        type: 'baidu',
+        message: '容器未设置',
+        timestamp: Date.now()
+      });
+      return;
+    }
+
     const key = this.tokens.baidu;
     if (!key) {
+      this.errorSubject.next({
+        type: 'baidu',
+        message: '请提供百度地图 AK (WebGL)',
+        timestamp: Date.now()
+      });
       this.renderError('Please provide Baidu AK (WebGL)', 'baidu');
       return;
     }
+
+    this.loadingSubject.next({ type: 'baidu', loading: true });
 
     // 百度 GL 版
     const url = `https://api.map.baidu.com/api?type=webgl&v=1.0&ak=${key}&callback=bmapInitCallback`;
@@ -300,22 +441,46 @@ export class BaseMapProvider {
         map.centerAndZoom(new BMapGL.Point(116.3974, 39.9093), 12 + 1.75);
       }
 
-      (window as any).bmapGLInstance = map; // Save instance for sync
+      this.instances.baidu = map; // Save instance for sync
       console.log('[BaseMapProvider] Baidu GL loaded.');
+      this.loadingSubject.next({ type: 'baidu', loading: false });
 
     } catch (e) {
       console.error('Failed to load Baidu', e);
+      this.loadingSubject.next({ type: 'baidu', loading: false });
+      const error = e instanceof Error ? e : new Error(String(e));
+      this.errorSubject.next({
+        type: 'baidu',
+        message: '百度地图加载失败',
+        error,
+        timestamp: Date.now()
+      });
       this.renderError('Failed to load Baidu SDK');
     }
   }
 
   private async loadGoogle(view?: { center: [number, number]; zoom: number; pitch: number; bearing: number }) {
-    if (!this.container) return;
+    if (!this.container) {
+      this.errorSubject.next({
+        type: 'google',
+        message: '容器未设置',
+        timestamp: Date.now()
+      });
+      return;
+    }
+
     const key = this.tokens.google;
     if (!key) {
+      this.errorSubject.next({
+        type: 'google',
+        message: '请提供 Google Maps API Key',
+        timestamp: Date.now()
+      });
       this.renderError('Please provide Google Maps API Key', 'google');
       return;
     }
+
+    this.loadingSubject.next({ type: 'google', loading: true });
 
     try {
       // Load Google Maps script
@@ -334,7 +499,7 @@ export class BaseMapProvider {
       this.container.appendChild(div);
 
       const google = (window as any).google;
-      const { Map } = await google.maps.importLibrary("maps");
+      const { Map } = await google.maps.importLibrary('maps');
 
       // Initial state
       let center = { lat: 32.0603, lng: 118.7969 };
@@ -354,28 +519,36 @@ export class BaseMapProvider {
         zoom,
         heading,
         tilt,
-        mapId: this.tokens.googleMapId || "DEMO_MAP_ID", // Required for Vector Maps
+        mapId: this.tokens.googleMapId || 'DEMO_MAP_ID', // Required for Vector Maps
         // renderingType: 'VECTOR', // Explicitly request vector (if types allow, or just rely on mapId)
         disableDefaultUI: true, // Hide UI controls
-        mapTypeId: 'roadmap', // Vector features are best in roadmap
+        mapTypeId: 'roadmap' // Vector features are best in roadmap
         // mapTypeId: 'satellite' // Satellite also supports tilt in 3D mode
       });
-
 
       // Force roadmap
       map.setMapTypeId('roadmap');
 
-      (window as any).googleMapInstance = map;
+      this.instances.google = map;
       console.log('[BaseMapProvider] Google Maps loaded.');
+      this.loadingSubject.next({ type: 'google', loading: false });
 
     } catch (e) {
       console.error('Failed to load Google Maps', e);
+      this.loadingSubject.next({ type: 'google', loading: false });
+      const error = e instanceof Error ? e : new Error(String(e));
+      this.errorSubject.next({
+        type: 'google',
+        message: 'Google Maps 加载失败',
+        error,
+        timestamp: Date.now()
+      });
       this.renderError('Failed to load Google Maps SDK', 'google');
     }
   }
 
   private loadCss(href: string) {
-    if (document.querySelector(`link[href="${href}"]`)) return;
+    if (document.querySelector(`link[href="${href}"]`)) {return;}
     const link = document.createElement('link');
     link.rel = 'stylesheet';
     link.href = href;
@@ -383,7 +556,16 @@ export class BaseMapProvider {
   }
 
   private async loadCesium(view?: { center: [number, number]; zoom: number; pitch: number; bearing: number }) {
-    if (!this.container) return;
+    if (!this.container) {
+      this.errorSubject.next({
+        type: 'cesium',
+        message: '容器未设置',
+        timestamp: Date.now()
+      });
+      return;
+    }
+
+    this.loadingSubject.next({ type: 'cesium', loading: true });
 
     // 1. Inject Style
     this.loadCss('https://unpkg.com/cesium@1.104.0/Build/Cesium/Widgets/widgets.css');
@@ -399,7 +581,10 @@ export class BaseMapProvider {
       // 3. Load Script
       await this.loadScript('https://unpkg.com/cesium@1.104.0/Build/Cesium/Cesium.js');
 
-      if (!this.container) return;
+      if (!this.container) {
+        this.loadingSubject.next({ type: 'cesium', loading: false });
+        return;
+      }
       this.container.innerHTML = ''; // Clear loading text
 
       const Cesium = (window as any).Cesium;
@@ -423,7 +608,7 @@ export class BaseMapProvider {
         creditContainer: document.createElement('div') // Hide credits for demo cleanup
       });
 
-      (window as any).cesiumViewer = viewer;
+      this.instances.cesium = viewer;
 
       // Initial View
       if (view) {
@@ -439,15 +624,24 @@ export class BaseMapProvider {
       }
 
       console.log('[BaseMapProvider] Cesium loaded via CDN.');
+      this.loadingSubject.next({ type: 'cesium', loading: false });
 
     } catch (e) {
       console.error('Failed to load Cesium', e);
+      this.loadingSubject.next({ type: 'cesium', loading: false });
+      const error = e instanceof Error ? e : new Error(String(e));
+      this.errorSubject.next({
+        type: 'cesium',
+        message: 'Cesium 加载失败 (网络/CDN 错误)',
+        error,
+        timestamp: Date.now()
+      });
       this.renderError('Failed to load Cesium (Network/CDN error?)', 'cesium');
     }
   }
 
   private renderError(msg: string, type: string = 'error') {
-    if (!this.container) return;
+    if (!this.container) {return;}
     this.container.innerHTML = `<div style="
         display:flex;flex-direction:column;align-items:center;justify-content:center;
         height:100%;color:#666;background:#f8f8f8;text-align:center;padding:20px;
@@ -456,5 +650,57 @@ export class BaseMapProvider {
       <p>${msg}</p>
       <small style="color:#999">See console for details</small>
     </div>`;
+  }
+
+  /**
+   * 获取当前地图实例
+   */
+  getMapInstance(type: MapType): any {
+    if (type === 'tianditu') {return null;}
+    return this.instances[type as keyof typeof this.instances];
+  }
+
+  /**
+   * 清理错误
+   */
+  clearError(type: MapType): void {
+    if (this.container) {
+      this.container.innerHTML = '';
+    }
+  }
+
+  /**
+   * 获取当前激活的地图类型
+   */
+  getActiveMapType(): MapType {
+    return this.activeMapType;
+  }
+
+  /**
+   * 重置所有状态
+   */
+  reset(): void {
+    // 清理所有实例
+    if (this.instances.amap) {
+      this.instances.amap.destroy?.();
+    }
+    this.instances.amap = null;
+    this.instances.baidu = null;
+    this.instances.cesium = null;
+    this.instances.google = null;
+
+    // 清理容器
+    if (this.container) {
+      this.container.innerHTML = '';
+    }
+
+    // 重置状态
+    this.activeMapType = 'amap';
+    this.lastView = null;
+    this.viewer = null;
+
+    // 清理缓存
+    this.loadingScripts.clear();
+    this.retryAttempts.clear();
   }
 }

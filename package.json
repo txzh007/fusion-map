@@ -11,12 +11,25 @@
     "build": "yarn workspace fusion-map build",
     "release": "cd packages/core && npm publish --access public",
     "build:demo": "yarn workspace easy-map-demo build",
-    "preview": "yarn workspace easy-map-demo preview"
+    "preview": "yarn workspace easy-map-demo preview",
+    "lint": "eslint packages/core/src --ext .ts",
+    "lint:fix": "eslint packages/core/src --ext .ts --fix"
   },
   "devDependencies": {
-    "@types/node": "^25.0.3",
-    "typescript": "^7.0.0",
-    "vite": "^4.0.0",
-    "vite-plugin-dts": "^3.9.0"
+    "@types/node": "^22.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.54.0",
+    "@typescript-eslint/parser": "^8.54.0",
+    "eslint": "^9.39.2",
+    "eslint-plugin-import": "^2.32.0",
+    "eslint-plugin-node": "^11.1.0",
+    "eslint-plugin-promise": "^7.2.1",
+    "typescript": "^5.7.0",
+    "vite": "^5.0.0",
+    "vite-plugin-dts": "^4.0.0"
+  },
+  "dependencies": {
+    "@types/lodash-es": "^4.17.12",
+    "lodash-es": "^4.17.23",
+    "rxjs": "^7.8.2"
   }
 }

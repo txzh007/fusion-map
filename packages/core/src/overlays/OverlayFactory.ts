@@ -140,3 +140,5 @@ export function createMarker(options: MarkerOptions): IMarker {
 export function createPolyline(options: PolylineOptions): IPolyline {
   return overlayFactory.createPolyline(options);
 }
+
+export default OverlayFactory;

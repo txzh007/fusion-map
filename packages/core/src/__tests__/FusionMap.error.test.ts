@@ -103,7 +103,7 @@ describe('FusionMap: Error Handling', () => {
     it('应该在容器不存在时抛出错误', () => {
       vi.spyOn(document, 'getElementById').mockReturnValue(null);
 
-      expect(() => new FusionMap('non-existent')).toThrow('Container non-existent not found');
+      expect(() => new FusionMap('non-existent')).toThrow('Container element with ID "non-existent" not found');
     });
   });
 
@@ -126,8 +126,8 @@ describe('FusionMap: Error Handling', () => {
         // 预期会抛出错误
       }
 
-      const error = await errorPromise;
-      expect(error.message).toContain('切换到 amap 失败');
+const error = await errorPromise;
+      expect(error.message).toContain('Failed to switch to amap');
 
       switchMapSpy.mockRestore();
     });
@@ -181,8 +181,8 @@ describe('FusionMap: Error Handling', () => {
 
       fusionMap.destroy();
 
-      const error = await errorPromise;
-      expect(error.message).toContain('销毁地图失败');
+const error = await errorPromise;
+      expect(error.message).toContain('Failed to destroy map');
     });
   });
 

@@ -51,7 +51,7 @@ graph TD
 ## 📦 安装
 
 ```bash
-npm install easy-map maplibre-gl
+npm install fusion-map maplibre-gl
 # 可选: 如果需要 3D 地球支持，请安装 cesium
 npm install cesium
 ```
@@ -61,7 +61,7 @@ npm install cesium
 ### 1. 基础初始化
 
 ```typescript
-import { FusionMap } from 'easy-map';
+import { FusionMap } from 'fusion-map';
 import 'maplibre-gl/dist/maplibre-gl.css';
 
 const map = new FusionMap({
@@ -126,6 +126,19 @@ map.map.addLayer({
 
 - **Cesium**: Peer Dependency (对等依赖)。仅在使用 'cesium' 模式时需要安装。
 - **Google Maps**: 需要有效的 API Key 并开启 **Maps JavaScript API**。若需要 3D 倾斜/旋转支持，必须提供 **Vector Map ID**。
+
+## 🛡️ 生产接入建议
+
+- 不要将各地图服务商 Key/Token 硬编码到源码，生产环境避免明文持久化到 `localStorage`。
+- 为 Google/高德/百度 Key 配置域名白名单和 API 范围限制。
+- `googleMapId` 在基础模式可选；需要矢量/3D 能力时应显式提供。
+
+## 🐞 已知问题
+
+- **第三方底图俯仰（Pitch）在部分层级可能与 MapLibre 短暂不同步（百度 / 高德 / Google）**：
+  - 现象：在低层级或缩放切换临界值附近，底图 SDK 可能触发内部相机约束（如最大俯仰钳制、动画插值回写），导致 Pitch 与 MapLibre 出现瞬时偏差。
+  - 当前处理：Fusion Map 已在各适配器中增加 `maxTilt` 约束、无动画写入、必要的下一帧回写，尽可能降低不同步概率。
+  - 说明：该问题属于第三方 SDK 行为差异，无法在所有设备与缩放状态下做到 100% 严格一致。
 
 ## 🤝 贡献代码
 

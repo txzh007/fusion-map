@@ -51,7 +51,7 @@ This means you can write your visualization code **solely using the standard Map
 ## 📦 Installation
 
 ```bash
-npm install easy-map maplibre-gl
+npm install fusion-map maplibre-gl
 # Optional: Install Cesium if you need 3D Globe support
 npm install cesium
 ```
@@ -61,7 +61,7 @@ npm install cesium
 ### 1. Basic Initialization
 
 ```typescript
-import { FusionMap } from 'easy-map';
+import { FusionMap } from 'fusion-map';
 import 'maplibre-gl/dist/maplibre-gl.css';
 
 const map = new FusionMap({
@@ -126,6 +126,19 @@ map.map.addLayer({
 
 - **Cesium**: Peer dependency. Required only if using 'cesium' mode.
 - **Google Maps**: Requires a valid API Key with **Maps JavaScript API** enabled. For tilt/heading support, vector maps (v=beta) are recommended.
+
+## 🛡️ Production Notes
+
+- Keep provider keys out of source code and avoid plain `localStorage` persistence in production.
+- Restrict Google/Amap/Baidu keys by domain and API scope.
+- Treat `googleMapId` as optional for basic mode; provide it when vector/3D capabilities are required.
+
+## 🐞 Known Issues
+
+- **Third-party pitch can be temporarily out of sync with MapLibre at some zoom levels (Baidu / Amap / Google)**:
+  - Symptom: around low-zoom or threshold transitions, provider SDKs may apply internal camera constraints (for example max-tilt clamping or animated interpolation) and briefly override pitch.
+  - Current mitigation: Fusion Map applies provider-side `maxTilt` clamping, no-animation writes, and frame-level reapplication where needed to reduce desync frequency.
+  - Note: this is a third-party SDK behavior difference, so strict 100% pitch consistency is not guaranteed under all devices/zoom states.
 
 ## 🤝 Contributing
 

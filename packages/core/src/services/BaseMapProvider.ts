@@ -1,15 +1,20 @@
-import gcoord from 'gcoord';
 import { MapService } from '../decorators';
 import { Subject } from 'rxjs';
 import type { MapInstances } from '../types';
 import {
   ErrorCode,
-  createTokenMissingError,
+  FusionMapError,
   createScriptLoadError,
-  createMapLoadError,
-  normalizeError,
-  type MapError as ExternalMapError
+  normalizeError
 } from '../errors';
+import {
+  AmapAdapter,
+  BaiduAdapter,
+  CesiumAdapter,
+  GoogleAdapter,
+  type CameraView,
+  type ThirdPartyMapAdapter
+} from './providers';
 
 export type MapType = 'amap' | 'baidu' | 'cesium' | 'tianditu' | 'google';
 
@@ -34,9 +39,49 @@ export class BaseMapProvider {
   private activeMapType: MapType = 'amap';
   private container: HTMLElement | null = null;
   private viewer: unknown = null; // Cesium Viewer
-  private tokens: { amap?: string; baidu?: string; cesium?: string; google?: string; tianditu?: string; googleMapId?: string; } = {};
+  private tokens: {
+    amap?: string;
+    baidu?: string;
+    cesium?: string;
+    google?: string;
+    tianditu?: string;
+    googleMapId?: string;
+  } = {};
   private cesiumCalibrationFactor: number = 1.9;
   private genericZoomOffset: number = 0; // Dynamic offset for calibration
+  private amapAdapter = new AmapAdapter();
+  private baiduAdapter = new BaiduAdapter();
+  private cesiumAdapter = new CesiumAdapter();
+  private googleAdapter = new GoogleAdapter();
+  private providerRoutes: Record<
+    Exclude<MapType, 'tianditu'>,
+    {
+      instanceKey: keyof Pick<MapInstances, 'amap' | 'baidu' | 'cesium' | 'google'>;
+      adapter: ThirdPartyMapAdapter;
+      loadMethod: 'loadAmap' | 'loadBaidu' | 'loadCesium' | 'loadGoogle';
+    }
+  > = {
+    amap: {
+      instanceKey: 'amap',
+      adapter: this.amapAdapter,
+      loadMethod: 'loadAmap'
+    },
+    baidu: {
+      instanceKey: 'baidu',
+      adapter: this.baiduAdapter,
+      loadMethod: 'loadBaidu'
+    },
+    cesium: {
+      instanceKey: 'cesium',
+      adapter: this.cesiumAdapter,
+      loadMethod: 'loadCesium'
+    },
+    google: {
+      instanceKey: 'google',
+      adapter: this.googleAdapter,
+      loadMethod: 'loadGoogle'
+    }
+  };
 
   // Store instances internally instead of on window
   private instances: Partial<MapInstances> = {
@@ -60,6 +105,8 @@ export class BaseMapProvider {
   // Track retry attempts
   private retryAttempts = new Map<string, number>();
   private maxRetries = 3;
+  private scriptTimeoutMs = 12000;
+  private scriptRetryDelayMs = 500;
 
   setContainer(element: HTMLElement) {
     this.container = element;
@@ -82,128 +129,64 @@ export class BaseMapProvider {
 
   private lastView: { center: [number, number]; zoom: number; pitch: number; bearing: number } | null = null;
 
-  setTokens(tokens: { amap?: string; baidu?: string; cesium?: string; google?: string; tianditu?: string; googleMapId?: string; }) {
+  setTokens(tokens: {
+    amap?: string;
+    baidu?: string;
+    cesium?: string;
+    google?: string;
+    tianditu?: string;
+    googleMapId?: string;
+  }) {
     this.tokens = tokens;
   }
 
   // === Camera Sync Logic ===
 
-  updateCamera(view: { center: [number, number]; zoom: number; pitch: number; bearing: number }) {
+  updateCamera(view: CameraView) {
     if (!this.container) {
       this.errorSubject.next({
         type: this.activeMapType,
-        message: '容器未设置',
+        message: 'Container is not set',
         timestamp: Date.now()
       });
       return;
     }
     this.lastView = view;
 
-    if (this.activeMapType === 'amap') {
-      const amap = this.instances.amap;
-      if (amap) {
-        // Transform WGS84 -> GCJ02
-        const gcj = gcoord.transform(view.center, gcoord.WGS84, gcoord.GCJ02);
-        // MapLibre (512px tiles) is typically 1 level lower than Amap (256px tiles) for same scale
-        // Previously +1. Now +1 + genericOffset
-        amap.setZoomAndCenter(view.zoom + 1 + this.genericZoomOffset, gcj, true);
-        amap.setPitch(view.pitch, true);
-        amap.setRotation(-view.bearing, true);
-      }
-    } else if (this.activeMapType === 'baidu') {
-      const bmap = this.instances.baidu;
-      if (bmap) {
-        const BMapGL = (window as any).BMapGL;
-        // Transform WGS84 -> BD09
-        const bd = gcoord.transform(view.center, gcoord.WGS84, gcoord.BD09);
-        const point = new BMapGL.Point(bd[0], bd[1]);
+    const context = {
+      zoomOffset: this.genericZoomOffset,
+      cesiumScaleFactor: this.cesiumCalibrationFactor,
+      containerHeight: this.container.clientHeight || 800
+    };
 
-        bmap.setHeading(-view.bearing, { noAnimation: true });
-        bmap.setTilt(view.pitch, { noAnimation: true });
-        // Previously +1.75. Now +1.75 + genericOffset
-        bmap.setZoom(view.zoom + 1.75 + this.genericZoomOffset, { noAnimation: true });
-        bmap.setCenter(point, { noAnimation: true });
-      }
-    } else if (this.activeMapType === 'cesium') {
-      const viewer = this.instances.cesium;
-      if (viewer) {
-        const Cesium = (window as any).Cesium;
-
-        // Use lookAt to pivot around the center point
-        // Range = Distance from center. equivalent to altitude when pitch is -90.
-        const range = this.zoomToHeight(view.zoom, view.center[1]);
-        const center = Cesium.Cartesian3.fromDegrees(view.center[0], view.center[1], 0);
-
-        const heading = Cesium.Math.toRadians(view.bearing);
-        // Clamp pitch to avoid -90 degree singularity (Gimbal Lock) which resets heading
-        const clampPitch = Math.max(view.pitch - 90, -89.99);
-        const pitch = Cesium.Math.toRadians(clampPitch);
-
-        viewer.camera.lookAt(center, new Cesium.HeadingPitchRange(heading, pitch, range));
-
-        // Unlock camera reference frame so it's not permanently locked to that point
-        // But keep the position we just set
-        viewer.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
-      }
-    } else if (this.activeMapType === 'google') {
-      const map = this.instances.google;
-      if (map) {
-        // Sync Google Maps
-        // MapLibre vs Google scale.
-        // Applying genericZoomOffset
-        // Check if moveCamera exists (Vector Map feature)
-        if (typeof map.moveCamera === 'function') {
-          console.log('[BaseMapProvider] Google Sync:', { z: view.zoom, h: view.bearing, p: view.pitch, map });
-          map.moveCamera({
-            center: { lat: view.center[1], lng: view.center[0] },
-            zoom: view.zoom + 1 + this.genericZoomOffset,
-            heading: view.bearing,
-            tilt: view.pitch
-          });
-        } else {
-          console.warn('[BaseMapProvider] Google Map is not Vector! moveCamera missing. Fallback to setters.');
-          map.setCenter({ lat: view.center[1], lng: view.center[0] });
-          map.setZoom(view.zoom + 1 + this.genericZoomOffset);
-          map.setHeading(view.bearing);
-          map.setTilt(view.pitch);
-        }
-      }
+    if (this.activeMapType === 'tianditu') {
+      return;
     }
-    // tianditu: no sync needed, handled by FusionMap native
+
+    const route = this.providerRoutes[this.activeMapType];
+    const instance = this.instances[route.instanceKey];
+    if (!instance) {
+      return;
+    }
+
+    route.adapter.applyCamera(instance as any, view, context);
   }
 
-  // Helper to convert Web Mercator Zoom to Altitude
-  // Precise formula matching MapLibre's scale to Cesium's Perspective Camera
+  // Kept for backward compatibility with existing tests and internal callers
   private zoomToHeight(zoom: number, lat: number) {
-    // 1. Earth Circumference (Meters)
     const C = 40075016.686;
     const latRad = lat * (Math.PI / 180);
-
-    // 2. Get Canvas Height (or default to 800 if not attached)
     const height = this.container ? this.container.clientHeight : 800;
-
-    // 3. Calculate MapLibre Ground Resolution at Center (Meters/Pixel)
-    // Res = (C * cos(lat)) / (512 * 2^zoom)
     const resolution = (C * Math.cos(latRad)) / (512 * Math.pow(2, zoom));
-
-    // 4. Calculate Visible Map Width (Meters) presented in the viewport
-    // Note: This logic assumes we match the VERTICAL coverage.
-    // If MapLibre fills height H with N meters, Cesium should too.
     const visibleMapHeight = resolution * height;
-
-    // 5. Calculate Cesium Altitude required to see that height
-    // Cesium Default FOV is 60 degrees (Vertical) -> PI/3
-    // visibleHeight = 2 * altitude * tan(FOV/2)
-    // altitude = visibleHeight / (2 * tan(FOV/2))
-
-    // tan(60/2) = tan(30) = 0.577350269
     const tan30 = 0.577350269;
-
-    // Apply user-defined calibration factor
     return (visibleMapHeight / (2 * tan30)) * this.cesiumCalibrationFactor;
   }
 
-  async switchMap(type: MapType, initialView?: { center: [number, number]; zoom: number; pitch: number; bearing: number }) {
+  async switchMap(
+    type: MapType,
+    initialView?: { center: [number, number]; zoom: number; pitch: number; bearing: number }
+  ) {
     console.log(`[BaseMapProvider] Switching to ${type}`);
     this.activeMapType = type;
 
@@ -211,34 +194,22 @@ export class BaseMapProvider {
     if (this.container) {
       this.container.innerHTML = '';
       // 如果有之前的实例需要销毁
-      if (this.instances.amap) {
-        this.instances.amap.destroy();
-        this.instances.amap = null;
-      }
-      // Baidu logic usually just needs DOM clear, but good to nullify
-      if (this.instances.baidu) {
-        this.instances.baidu = null;
-      }
-      // Cesium cleanup
-      if (this.instances.cesium) {
-        this.instances.cesium = null;
-      }
-      // Google cleanup
-      if (this.instances.google) {
-        this.instances.google = null;
+      for (const route of Object.values(this.providerRoutes)) {
+        const instance = this.instances[route.instanceKey];
+        if (!instance) {
+          continue;
+        }
+        route.adapter.dispose(instance as any);
+        this.instances[route.instanceKey] = null;
       }
     }
 
-    if (type === 'cesium') {
-      await this.loadCesium(initialView);
-    } else if (type === 'amap') {
-      await this.loadAmap(initialView);
-    } else if (type === 'baidu') {
-      await this.loadBaidu(initialView);
-    } else if (type === 'google') {
-      await this.loadGoogle(initialView);
+    if (type === 'tianditu') {
+      return;
     }
-    // tianditu: do nothing, container stays empty
+
+    const route = this.providerRoutes[type];
+    await this[route.loadMethod](initialView);
   }
 
   // 动态加载脚本助手
@@ -253,127 +224,126 @@ export class BaseMapProvider {
       return Promise.resolve();
     }
 
-    const promise = new Promise<void>((resolve, reject) => {
-      const attemptLoad = (retryCount: number = 0) => {
-        const script = document.createElement('script');
-        script.src = src;
-        script.onload = () => {
-          this.loadingScripts.delete(src);
-          this.retryAttempts.delete(src);
-          resolve();
-        };
-        script.onerror = (error) => {
-          this.loadingScripts.delete(src);
-
-          // 重试逻辑
-          if (retryCount < this.maxRetries) {
-            console.warn(`[BaseMapProvider] 脚本加载失败，重试 ${retryCount + 1}/${this.maxRetries}: ${src}`);
-            setTimeout(() => attemptLoad(retryCount + 1), 1000 * (retryCount + 1));
-          } else {
-            const errorMsg = `脚本加载失败: ${src}`;
-            this.errorSubject.next({
-              type: this.activeMapType,
-              message: errorMsg,
-              error: error instanceof Error ? error : new Error(String(error)),
-              timestamp: Date.now()
-            });
-            reject(new Error(errorMsg));
-          }
-        };
-        document.head.appendChild(script);
-      };
-
-      attemptLoad();
+    const promise = this.loadScriptWithRetry(src).finally(() => {
+      this.loadingScripts.delete(src);
     });
 
     this.loadingScripts.set(src, promise);
     return promise;
   }
 
+  private async loadScriptWithRetry(src: string): Promise<void> {
+    for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
+      this.retryAttempts.set(src, attempt);
+
+      try {
+        await this.loadScriptOnce(src, this.scriptTimeoutMs);
+        this.retryAttempts.delete(src);
+        return;
+      } catch (e) {
+        const normalized = normalizeError(e);
+        const isLastAttempt = attempt === this.maxRetries;
+
+        if (isLastAttempt) {
+          const finalError = normalized.code ? normalized : createScriptLoadError(src, normalized);
+
+          this.errorSubject.next({
+            type: this.activeMapType,
+            message: finalError.message,
+            error: finalError,
+            timestamp: Date.now()
+          });
+
+          throw finalError;
+        }
+
+        console.warn(`[BaseMapProvider] Script load failed, retry ${attempt + 1}/${this.maxRetries}: ${src}`);
+
+        await this.delay(this.scriptRetryDelayMs * (attempt + 1));
+      }
+    }
+  }
+
+  private loadScriptOnce(src: string, timeoutMs: number): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = src;
+
+      let settled = false;
+      const onDone = (handler: () => void) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        script.onload = null;
+        script.onerror = null;
+        handler();
+      };
+
+      const timer = globalThis.setTimeout(() => {
+        onDone(() => {
+          script.remove?.();
+          reject(
+            new FusionMapError(ErrorCode.TIMEOUT, `Script load timeout: ${src}`, {
+              context: { src, timeoutMs, mapType: this.activeMapType }
+            })
+          );
+        });
+      }, timeoutMs);
+
+      script.onload = () => {
+        onDone(() => {
+          globalThis.clearTimeout(timer);
+          resolve();
+        });
+      };
+
+      script.onerror = (event) => {
+        onDone(() => {
+          globalThis.clearTimeout(timer);
+          script.remove?.();
+          const cause = event instanceof Error ? event : new Error('Unknown script load error');
+          reject(createScriptLoadError(src, cause));
+        });
+      };
+
+      document.head.appendChild(script);
+    });
+  }
+
+  private delay(ms: number): Promise<void> {
+    return new Promise((resolve) => {
+      globalThis.setTimeout(resolve, ms);
+    });
+  }
+
   private async loadAmap(view?: { center: [number, number]; zoom: number; pitch: number; bearing: number }) {
     if (!this.container) {
-      const error = normalizeError('Container not set');
       this.errorSubject.next({
         type: 'amap',
-        message: '容器未设置',
-        error: error.code ? error : undefined,
+        message: 'Container is not set',
         timestamp: Date.now()
       });
-      return;
-    }
-
-    const key = this.tokens.amap;
-    if (!key) {
-      const error = createTokenMissingError('Amap');
-      this.errorSubject.next({
-        type: 'amap',
-        message: error.message,
-        error: error.code ? error : undefined,
-        timestamp: Date.now()
-      });
-      this.renderError('Please provide Amap Key (JS API)', 'amap');
       return;
     }
 
     this.loadingSubject.next({ type: 'amap', loading: true });
 
     try {
-      // 1. 加载 JSAPI Loader (或者直接加载 API)
-      const callbackName = 'amapInitCallback';
-      const url = `https://webapi.amap.com/maps?v=2.0&key=${key}&callback=${callbackName}`;
-
-      if (!(window as any).AMap) {
-        await new Promise<void>((resolve, reject) => {
-          (window as any)[callbackName] = () => {
-            delete (window as any)[callbackName];
-            resolve();
-          };
-          this.loadScript(url).catch(reject);
-        });
+      if (this.activeMapType !== 'amap' || !this.container) {
+        this.loadingSubject.next({ type: 'amap', loading: false });
+        return;
       }
-
-      // 2. 初始化地图
-      const div = document.createElement('div');
-      div.style.width = '100%';
-      div.style.height = '100%';
-      div.id = 'amap-container-inner';
-      this.container.appendChild(div);
-
-      const AMap = (window as any).AMap;
-
-      // Determine initial state
-      let center = [116.3974, 39.9093];
-      let zoom = 12; // Base logic
-      let pitch = 0;
-      let rotation = 0;
-
-      if (view) {
-        // Transform WGS84 -> GCJ02
-        center = gcoord.transform(view.center, gcoord.WGS84, gcoord.GCJ02);
-        zoom = view.zoom + 1; // MapLibre -> Amap Offset
-        pitch = view.pitch;
-        rotation = -view.bearing;
-      }
-
-      const map = new AMap.Map(div.id, {
-        viewMode: '3D', // Enable 3D mode
-        resizeEnable: true,
-        zoom: zoom,
-        center: center,
-        pitch: pitch,
-        rotation: rotation
-      });
-      this.instances.amap = map;
+      this.instances.amap = await this.amapAdapter.load(view, this.createAdapterLoadContext());
       console.log('[BaseMapProvider] Amap loaded.');
       this.loadingSubject.next({ type: 'amap', loading: false });
-
     } catch (e) {
       console.error('Failed to load Amap', e);
       this.loadingSubject.next({ type: 'amap', loading: false });
       const error = e instanceof Error ? e : new Error(String(e));
       this.errorSubject.next({
         type: 'amap',
-        message: '高德地图加载失败',
+        message: 'Failed to load Amap',
         error,
         timestamp: Date.now()
       });
@@ -385,77 +355,29 @@ export class BaseMapProvider {
     if (!this.container) {
       this.errorSubject.next({
         type: 'baidu',
-        message: '容器未设置',
+        message: 'Container is not set',
         timestamp: Date.now()
       });
-      return;
-    }
-
-    const key = this.tokens.baidu;
-    if (!key) {
-      this.errorSubject.next({
-        type: 'baidu',
-        message: '请提供百度地图 AK (WebGL)',
-        timestamp: Date.now()
-      });
-      this.renderError('Please provide Baidu AK (WebGL)', 'baidu');
       return;
     }
 
     this.loadingSubject.next({ type: 'baidu', loading: true });
 
-    // 百度 GL 版
-    const url = `https://api.map.baidu.com/api?type=webgl&v=1.0&ak=${key}&callback=bmapInitCallback`;
-
     try {
-      if (!(window as any).BMapGL) {
-        await new Promise<void>((resolve, reject) => {
-          (window as any).bmapInitCallback = () => {
-            resolve();
-          };
-          this.loadScript(url).catch(reject);
-        });
-      }
-
-      const div = document.createElement('div');
-      div.style.width = '100%';
-      div.style.height = '100%';
-      div.id = 'bmap-container-inner';
-      this.container.appendChild(div);
-
-      const BMapGL = (window as any).BMapGL;
-      const map = new BMapGL.Map(div.id);
-      map.enableScrollWheelZoom(true);
-      map.enableTilt();
-      map.enableRotate();
-
-      // Determine initial state
-      if (view) {
-        const bd = gcoord.transform(view.center, gcoord.WGS84, gcoord.BD09);
-        // Baidu allows float zoom? Yes.
-        // Baidu is approx +1.75 offset from MapLibre as per calibration
-        map.centerAndZoom(new BMapGL.Point(bd[0], bd[1]), view.zoom + 1.75);
-        map.setTilt(view.pitch);
-        map.setHeading(-view.bearing);
-      } else {
-        map.centerAndZoom(new BMapGL.Point(116.3974, 39.9093), 12 + 1.75);
-      }
-
-      this.instances.baidu = map; // Save instance for sync
+      this.instances.baidu = await this.baiduAdapter.load(view, this.createAdapterLoadContext());
       console.log('[BaseMapProvider] Baidu GL loaded.');
       this.loadingSubject.next({ type: 'baidu', loading: false });
-
     } catch (e) {
       console.error('Failed to load Baidu', e);
       this.loadingSubject.next({ type: 'baidu', loading: false });
       const error = e instanceof Error ? e : new Error(String(e));
       this.errorSubject.next({
         type: 'baidu',
-        message: '百度地图加载失败',
+        message: 'Failed to load Baidu',
         error,
         timestamp: Date.now()
       });
-      this.renderError('Failed to load Baidu SDK');
+      this.renderError('Failed to load Baidu');
     }
   }
 
@@ -463,92 +385,36 @@ export class BaseMapProvider {
     if (!this.container) {
       this.errorSubject.next({
         type: 'google',
-        message: '容器未设置',
+        message: 'Container is not set',
         timestamp: Date.now()
       });
-      return;
-    }
-
-    const key = this.tokens.google;
-    if (!key) {
-      this.errorSubject.next({
-        type: 'google',
-        message: '请提供 Google Maps API Key',
-        timestamp: Date.now()
-      });
-      this.renderError('Please provide Google Maps API Key', 'google');
       return;
     }
 
     this.loadingSubject.next({ type: 'google', loading: true });
 
     try {
-      // Load Google Maps script
-      // v=beta is needed for WebGL/Tilt features sometimes, or just use 'weekly'
-      // We need to load main script then importing libraries
-      // Legacy loading usually: https://maps.googleapis.com/maps/api/js?key=...
-
-      if (!(window as any).google || !(window as any).google.maps) {
-        await this.loadScript(`https://maps.googleapis.com/maps/api/js?key=${key}&v=beta&libraries=geometry,places`);
-      }
-
-      const div = document.createElement('div');
-      div.style.width = '100%';
-      div.style.height = '100%';
-      div.id = 'google-container-inner';
-      this.container.appendChild(div);
-
-      const google = (window as any).google;
-      const { Map } = await google.maps.importLibrary('maps');
-
-      // Initial state
-      let center = { lat: 32.0603, lng: 118.7969 };
-      let zoom = 14;
-      let tilt = 0;
-      let heading = 0;
-
-      if (view) {
-        center = { lat: view.center[1], lng: view.center[0] };
-        zoom = view.zoom;
-        tilt = view.pitch;
-        heading = -view.bearing;
-      }
-
-      const map = new Map(div, {
-        center,
-        zoom,
-        heading,
-        tilt,
-        mapId: this.tokens.googleMapId || 'DEMO_MAP_ID', // Required for Vector Maps
-        // renderingType: 'VECTOR', // Explicitly request vector (if types allow, or just rely on mapId)
-        disableDefaultUI: true, // Hide UI controls
-        mapTypeId: 'roadmap' // Vector features are best in roadmap
-        // mapTypeId: 'satellite' // Satellite also supports tilt in 3D mode
-      });
-
-      // Force roadmap
-      map.setMapTypeId('roadmap');
-
-      this.instances.google = map;
+      this.instances.google = await this.googleAdapter.load(view, this.createAdapterLoadContext());
       console.log('[BaseMapProvider] Google Maps loaded.');
       this.loadingSubject.next({ type: 'google', loading: false });
-
     } catch (e) {
       console.error('Failed to load Google Maps', e);
       this.loadingSubject.next({ type: 'google', loading: false });
-      const error = e instanceof Error ? e : new Error(String(e));
+      const normalizedError = normalizeError(e);
       this.errorSubject.next({
         type: 'google',
-        message: 'Google Maps 加载失败',
-        error,
+        message: normalizedError.message,
+        error: normalizedError.code ? normalizedError : undefined,
         timestamp: Date.now()
       });
-      this.renderError('Failed to load Google Maps SDK', 'google');
+      this.renderError(normalizedError.message, 'google');
     }
   }
 
   private loadCss(href: string) {
-    if (document.querySelector(`link[href="${href}"]`)) {return;}
+    if (document.querySelector(`link[href="${href}"]`)) {
+      return;
+    }
     const link = document.createElement('link');
     link.rel = 'stylesheet';
     link.href = href;
@@ -559,7 +425,7 @@ export class BaseMapProvider {
     if (!this.container) {
       this.errorSubject.next({
         type: 'cesium',
-        message: '容器未设置',
+        message: 'Container is not set',
         timestamp: Date.now()
       });
       return;
@@ -567,81 +433,51 @@ export class BaseMapProvider {
 
     this.loadingSubject.next({ type: 'cesium', loading: true });
 
-    // 1. Inject Style
-    this.loadCss('https://unpkg.com/cesium@1.104.0/Build/Cesium/Widgets/widgets.css');
-
-    // 2. Set Base URL
-    (window as any).CESIUM_BASE_URL = 'https://unpkg.com/cesium@1.104.0/Build/Cesium/';
-
-    const token = this.tokens.cesium;
-
     try {
       this.container.innerHTML = '<div style="color:white;padding:20px;">Loading Cesium (CDN)...</div>';
-
-      // 3. Load Script
-      await this.loadScript('https://unpkg.com/cesium@1.104.0/Build/Cesium/Cesium.js');
-
       if (!this.container) {
         this.loadingSubject.next({ type: 'cesium', loading: false });
         return;
       }
       this.container.innerHTML = ''; // Clear loading text
 
-      const Cesium = (window as any).Cesium;
-      if (token) {
-        Cesium.Ion.defaultAccessToken = token;
-      }
-
-      const viewer = new Cesium.Viewer(this.container, {
-        animation: false,
-        baseLayerPicker: false, // We control base layer via FusionMap mechanisms strictly, or allow Cesium's?
-        fullscreenButton: false,
-        vrButton: false,
-        geocoder: false,
-        homeButton: false,
-        infoBox: false,
-        sceneModePicker: false,
-        selectionIndicator: false,
-        timeline: false,
-        navigationHelpButton: false,
-        scene3DOnly: true,
-        creditContainer: document.createElement('div') // Hide credits for demo cleanup
-      });
-
-      this.instances.cesium = viewer;
-
-      // Initial View
-      if (view) {
-        const heading = Cesium.Math.toRadians(view.bearing);
-        const pitch = Cesium.Math.toRadians(view.pitch - 90);
-        const roll = 0;
-        const height = this.zoomToHeight(view.zoom, view.center[1]);
-
-        viewer.camera.setView({
-          destination: Cesium.Cartesian3.fromDegrees(view.center[0], view.center[1], height),
-          orientation: { heading, pitch, roll }
-        });
-      }
+      this.instances.cesium = await this.cesiumAdapter.load(view, this.createAdapterLoadContext());
 
       console.log('[BaseMapProvider] Cesium loaded via CDN.');
       this.loadingSubject.next({ type: 'cesium', loading: false });
-
     } catch (e) {
       console.error('Failed to load Cesium', e);
       this.loadingSubject.next({ type: 'cesium', loading: false });
       const error = e instanceof Error ? e : new Error(String(e));
       this.errorSubject.next({
         type: 'cesium',
-        message: 'Cesium 加载失败 (网络/CDN 错误)',
+        message: 'Failed to load Cesium (Network/CDN error)',
         error,
         timestamp: Date.now()
       });
-      this.renderError('Failed to load Cesium (Network/CDN error?)', 'cesium');
+      this.renderError('Failed to load Cesium (Network/CDN error)', 'cesium');
     }
   }
 
+  private createAdapterLoadContext() {
+    if (!this.container) {
+      throw new Error('Container is not set');
+    }
+
+    return {
+      container: this.container,
+      tokens: this.tokens,
+      zoomOffset: this.genericZoomOffset,
+      cesiumScaleFactor: this.cesiumCalibrationFactor,
+      loadScript: this.loadScript.bind(this),
+      loadCss: this.loadCss.bind(this)
+    };
+  }
+
   private renderError(msg: string, type: string = 'error') {
-    if (!this.container) {return;}
+    if (!this.container) {
+      return;
+    }
     this.container.innerHTML = `<div style="
         display:flex;flex-direction:column;align-items:center;justify-content:center;
         height:100%;color:#666;background:#f8f8f8;text-align:center;padding:20px;
@@ -656,7 +492,9 @@ export class BaseMapProvider {
    * 获取当前地图实例
    */
   getMapInstance(type: MapType): any {
-    if (type === 'tianditu') {return null;}
+    if (type === 'tianditu') {
+      return null;
+    }
     return this.instances[type as keyof typeof this.instances];
   }
 

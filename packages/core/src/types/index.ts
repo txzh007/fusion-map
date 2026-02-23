@@ -82,7 +82,7 @@ export interface CameraState {
   center: [number, number];
   /** 缩放级别 */
   zoom: number;
-  /** 俯仰角（0-60度） */
+  /** 俯仰角（默认 0-67.5 度，可通过 mapOptions.maxPitch 调整） */
   pitch: number;
   /** 旋转角（0-360度） */
   bearing: number;

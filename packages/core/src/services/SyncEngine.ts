@@ -1,26 +1,40 @@
 import maplibregl from 'maplibre-gl';
 import { MapService, Watch, AutoBind, Inject, WATCH_METADATA_KEY, WatchMetadata } from '../decorators';
 import { BaseMapProvider } from './BaseMapProvider';
-import { debounce } from 'lodash-es';
+import { PROVIDER_CAMERA_POLICIES } from './providers/cameraPolicies';
 
 @MapService()
 export class SyncEngine {
   private map: maplibregl.Map | null = null;
   private isSyncing = false;
+  private framePending = false;
+  private static readonly BEARING_EPSILON = 0.01;
 
   @Inject(() => BaseMapProvider)
   private baseMapProvider!: BaseMapProvider;
 
-  // 防抖的相机更新函数
-  private debouncedUpdateCamera = debounce(() => {
+  private pushCameraState() {
     if (!this.map || this.isSyncing) {return;}
 
     this.isSyncing = true;
     try {
       const center = this.map.getCenter();
       const zoom = this.map.getZoom();
-      const bearing = this.map.getBearing();
+      let bearing = this.map.getBearing();
       const pitch = this.map.getPitch();
+      const activeMapType =
+        typeof (this.baseMapProvider as any).getActiveMapType === 'function'
+          ? (this.baseMapProvider as any).getActiveMapType()
+          : 'amap';
+
+      if (
+        activeMapType === 'baidu' &&
+        zoom <= PROVIDER_CAMERA_POLICIES.baidu.autoNorthAtMaplibreZoom &&
+        Math.abs(bearing) > SyncEngine.BEARING_EPSILON
+      ) {
+        this.map.setBearing(0);
+        bearing = 0;
+      }
 
       this.baseMapProvider.updateCamera({
         center: [center.lng, center.lat],
@@ -31,7 +45,22 @@ export class SyncEngine {
     } finally {
       this.isSyncing = false;
     }
-  }, 100); // 100ms 防抖
+  }
+
+  private scheduleCameraSync() {
+    if (this.framePending) {return;}
+    this.framePending = true;
+
+    const requestFrame =
+      typeof globalThis.requestAnimationFrame === 'function'
+        ? globalThis.requestAnimationFrame.bind(globalThis)
+        : (cb: FrameRequestCallback) => globalThis.setTimeout(() => cb(Date.now()), 16);
+
+    requestFrame(() => {
+      this.framePending = false;
+      this.pushCameraState();
+    });
+  }
 
   // 绑定 MapLibre 实例并自动挂载 @Watch 事件
   bind(map: maplibregl.Map) {
@@ -57,12 +86,25 @@ export class SyncEngine {
   @AutoBind
   onCameraMove() {
     if (!this.map) {return;}
-    this.debouncedUpdateCamera();
+    this.scheduleCameraSync();
   }
 
   @Watch('zoom')
   @AutoBind
   onZoomChange() {
     console.log('[SyncEngine] Zoom changed, adjusting LOD...');
+    this.scheduleCameraSync();
+  }
+
+  @Watch('pitch')
+  @AutoBind
+  onPitchChange() {
+    this.scheduleCameraSync();
+  }
+
+  @Watch('rotate')
+  @AutoBind
+  onRotateChange() {
+    this.scheduleCameraSync();
   }
 }

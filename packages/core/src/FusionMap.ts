@@ -3,19 +3,25 @@ import { MapService, Inject } from './decorators';
 import { SyncEngine } from './services/SyncEngine';
 import { BaseMapProvider, type MapType } from './services/BaseMapProvider';
 import type { FusionMapConfig, MapLoadingState, GenericEventOn } from './types';
-import {
-  ErrorCode,
-  createContainerNotFoundError,
-  normalizeError,
-  type MapError
-} from './errors';
+import { ErrorCode, createContainerNotFoundError, normalizeError, type MapError } from './errors';
 import { Subject } from 'rxjs';
 
+// @ts-ignore - CSS import for maplibre-gl styles
 import 'maplibre-gl/dist/maplibre-gl.css';
+
+const REFERENCE_BASE_SOURCE_ID = 'maplibre-reference-base-source';
+const REFERENCE_BASE_LAYER_ID = 'maplibre-reference-base-layer';
+const REFERENCE_BG_LAYER_ID = 'maplibre-reference-bg-layer';
+const REFERENCE_BASE_OPACITY = 0.5;
+const DEFAULT_MAX_PITCH = 67.5;
 
 @MapService()
 export class FusionMap {
   private map!: maplibregl.Map;
+  private referenceBaseOpacity = REFERENCE_BASE_OPACITY;
+  private pendingProjection: 'globe' | 'mercator' | null = null;
+  private projectionLoadListenerBound = false;
+  private maxPitchLimit = DEFAULT_MAX_PITCH;
 
   @Inject(() => SyncEngine)
   private syncEngine!: SyncEngine;
@@ -31,7 +37,10 @@ export class FusionMap {
   public errors$ = this.errorSubject.asObservable();
   public loading$ = this.loadingSubject.asObservable();
 
-  constructor(private containerId: string, options: FusionMapConfig = {}) {
+  constructor(
+    private containerId: string,
+    options: FusionMapConfig = {}
+  ) {
     // Subscribe to BaseMapProvider errors and loading states
     this.baseMapProvider.errors$.subscribe((error) => {
       this.errorSubject.next(error);
@@ -73,6 +82,7 @@ export class FusionMap {
     baseContainer.style.width = '100%';
     baseContainer.style.height = '100%';
     baseContainer.style.zIndex = '0';
+    baseContainer.style.pointerEvents = 'none';
     root.appendChild(baseContainer);
     this.baseMapProvider.setContainer(baseContainer);
 
@@ -88,13 +98,39 @@ export class FusionMap {
 
     // 2. 初始化 MapLibre
     const mapOpts = options.mapOptions || {};
+    this.maxPitchLimit = typeof mapOpts.maxPitch === 'number' ? mapOpts.maxPitch : DEFAULT_MAX_PITCH;
+    const tdtToken = options.tokens?.tianditu || '';
+    const referenceTiles = this.getReferenceTiles(tdtToken);
 
     this.map = new maplibregl.Map({
       container: topContainer.id,
       style: {
         version: 8,
-        sources: {},
-        layers: [],
+        sources: {
+          [REFERENCE_BASE_SOURCE_ID]: {
+            type: 'raster',
+            tiles: referenceTiles,
+            tileSize: 256
+          }
+        },
+        layers: [
+          {
+            id: REFERENCE_BG_LAYER_ID,
+            type: 'background',
+            paint: {
+              'background-color': '#1f2937',
+              'background-opacity': Math.max(0.15, this.referenceBaseOpacity * 0.7)
+            }
+          },
+          {
+            id: REFERENCE_BASE_LAYER_ID,
+            type: 'raster',
+            source: REFERENCE_BASE_SOURCE_ID,
+            paint: {
+              'raster-opacity': this.referenceBaseOpacity
+            }
+          }
+        ],
         // @ts-ignore - MapLibre 类型定义中缺少 projection 属性
         projection: { type: 'globe' }
       },
@@ -102,46 +138,25 @@ export class FusionMap {
       zoom: 2,
       minZoom: 2,
       maxZoom: 22,
+      maxPitch: this.maxPitchLimit,
+      bearingSnap: 0,
       ...mapOpts
-    // @ts-ignore - projection 未在 MapOptions 类型中定义
-    } as maplibregl.MapOptions & { projection?: { type: 'globe' | 'mercator' } });
-
-    this.map.on('zoom', () => {
-      this.updatePitchLimits();
+      // @ts-ignore - projection 未在 MapOptions 类型中定义
+    } as maplibregl.MapOptions & {
+      projection?: { type: 'globe' | 'mercator' };
     });
 
     this.map.on('load', () => {
+      this.projectionLoadListenerBound = false;
+
       // Tianditu Base Map (Standard Vector)
       // Note: Requires a valid TK (Token).
       // Please replace 'YOUR_TIANDITU_KEY' with your actual key if needed, or use a working one if provided.
-      const tdtToken = options.tokens?.tianditu || 'YOUR_TIANDITU_KEY';
-      if (tdtToken === 'YOUR_TIANDITU_KEY') {
+      if (!tdtToken) {
         console.warn(
-          '[FusionMap] Tianditu Token is missing or default. ' +
-          'Map tiles may not load, making the globe invisible.'
+          '[FusionMap] Tianditu Token is missing. Tianditu base map may not load.'
         );
       }
-
-      // Generate t0-t7 subdomains
-      const subdomains = ['0', '1', '2', '3', '4', '5', '6', '7'];
-
-      const vecTiles = subdomains.map((s) => {
-        const baseUrl = `https://t${s}.tianditu.gov.cn/vec_w/wmts`;
-        const params = new URLSearchParams({
-          SERVICE: 'WMTS',
-          REQUEST: 'GetTile',
-          VERSION: '1.0.0',
-          LAYER: 'vec',
-          STYLE: 'default',
-          TILEMATRIXSET: 'w',
-          FORMAT: 'tiles',
-          TILEMATRIX: '{z}',
-          TILEROW: '{y}',
-          TILECOL: '{x}',
-          tk: tdtToken
-        });
-        return `${baseUrl}?${params.toString()}`;
-      });
 
       // cvaTiles 未使用，已被注释
       // const cvaTiles = subdomains.map((s) => {
@@ -164,7 +179,7 @@ export class FusionMap {
 
       this.map.addSource('tianditu-vec', {
         type: 'raster',
-        tiles: vecTiles,
+        tiles: this.getTiandituVecTiles(tdtToken),
         tileSize: 256
       });
 
@@ -181,7 +196,7 @@ export class FusionMap {
         source: 'tianditu-vec',
         paint: {},
         layout: {
-          // visibility: 'none' // Default hidden for Amap/Cesium modes
+          visibility: 'none'
         }
       });
 
@@ -192,6 +207,7 @@ export class FusionMap {
       //   paint: {}
       // });
 
+      this.applyPendingProjection();
     });
 
     // 3. 启动同步引擎
@@ -205,41 +221,81 @@ export class FusionMap {
 
   // 切换投影
   setProjection(type: 'globe' | 'mercator') {
-    if (this.map) {
+    if (!this.map) {
+      return;
+    }
+
+    this.pendingProjection = type;
+
+    const isStyleLoaded = typeof (this.map as any).isStyleLoaded === 'function'
+      ? (this.map as any).isStyleLoaded()
+      : true;
+
+    if (!isStyleLoaded) {
+      this.bindProjectionOnLoad();
+      return;
+    }
+
+    this.applyPendingProjection();
+  }
+
+  private bindProjectionOnLoad() {
+    if (!this.map || this.projectionLoadListenerBound) {
+      return;
+    }
+
+    this.projectionLoadListenerBound = true;
+    const mapAny = this.map as any;
+    const handler = () => {
+      this.projectionLoadListenerBound = false;
+      if (typeof mapAny.off === 'function') {
+        mapAny.off('load', handler);
+      }
+      this.applyPendingProjection();
+    };
+
+    if (typeof mapAny.once === 'function') {
+      mapAny.once('load', handler);
+      return;
+    }
+
+    if (typeof mapAny.on === 'function') {
+      mapAny.on('load', handler);
+      return;
+    }
+
+    this.projectionLoadListenerBound = false;
+  }
+
+  private applyPendingProjection() {
+    if (!this.map || !this.pendingProjection) {
+      return;
+    }
+
+    const type = this.pendingProjection;
+
+    try {
       console.log(`[FusionMap] Setting projection to ${type}`);
       // @ts-ignore - setProjection types might be missing in some versions
-      this.map.setProjection({
-        type: type
-      });
-      // Update limits immediately after projection change
+      this.map.setProjection({ type });
+      this.pendingProjection = null;
       this.updatePitchLimits();
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      if (message.includes('Style is not done loading')) {
+        this.bindProjectionOnLoad();
+        return;
+      }
+      throw e;
     }
   }
 
   private updatePitchLimits() {
-    if (!this.map) {return;}
-
-    // Check current projection
-    // @ts-ignore
-    const proj = this.map.getProjection();
-    const isGlobe = proj && proj.type === 'globe';
-
-    if (!isGlobe) {
-      this.map.setMaxPitch(60); // Default max pitch for mercator
+    if (!this.map) {
       return;
     }
 
-    const zoom = this.map.getZoom();
-    let maxPitch = 60;
-
-    if (zoom < 2) {
-      maxPitch = 0;
-    } else if (zoom >= 2 && zoom <= 10) {
-      // Linear interpolation: (zoom - 2) / (10 - 2) * 60
-      maxPitch = ((zoom - 2) / 8) * 60;
-    }
-
-    this.map.setMaxPitch(maxPitch);
+    this.map.setMaxPitch(this.maxPitchLimit);
   }
 
   /**
@@ -262,6 +318,65 @@ export class FusionMap {
     this.baseMapProvider.setZoomOffset(offset);
   }
 
+  setReferenceOpacity(opacity: number) {
+    const normalizedOpacity = Number.isFinite(opacity) ? Math.min(1, Math.max(0, opacity)) : REFERENCE_BASE_OPACITY;
+    this.referenceBaseOpacity = normalizedOpacity;
+
+    if (!this.map) {
+      return;
+    }
+
+    if (this.map.getLayer(REFERENCE_BASE_LAYER_ID)) {
+      this.map.setPaintProperty(REFERENCE_BASE_LAYER_ID, 'raster-opacity', normalizedOpacity);
+      if (this.map.getLayer(REFERENCE_BG_LAYER_ID)) {
+        this.map.setPaintProperty(REFERENCE_BG_LAYER_ID, 'background-opacity', Math.max(0.15, normalizedOpacity * 0.7));
+      }
+      return;
+    }
+
+    this.map.once('load', () => {
+      if (this.map.getLayer(REFERENCE_BASE_LAYER_ID)) {
+        this.map.setPaintProperty(REFERENCE_BASE_LAYER_ID, 'raster-opacity', this.referenceBaseOpacity);
+        if (this.map.getLayer(REFERENCE_BG_LAYER_ID)) {
+          this.map.setPaintProperty(
+            REFERENCE_BG_LAYER_ID,
+            'background-opacity',
+            Math.max(0.15, this.referenceBaseOpacity * 0.7)
+          );
+        }
+      }
+    });
+  }
+
+  private getReferenceTiles(tdtToken: string): string[] {
+    if (tdtToken) {
+      return this.getTiandituVecTiles(tdtToken);
+    }
+
+    return ['https://demotiles.maplibre.org/tiles/{z}/{x}/{y}.png'];
+  }
+
+  private getTiandituVecTiles(token: string): string[] {
+    const subdomains = ['0', '1', '2', '3', '4', '5', '6', '7'];
+    const encodedToken = encodeURIComponent(token);
+    return subdomains.map((s) => {
+      return (
+        `https://t${s}.tianditu.gov.cn/vec_w/wmts` +
+        '?SERVICE=WMTS' +
+        '&REQUEST=GetTile' +
+        '&VERSION=1.0.0' +
+        '&LAYER=vec' +
+        '&STYLE=default' +
+        '&TILEMATRIXSET=w' +
+        '&FORMAT=tiles' +
+        '&TILEMATRIX={z}' +
+        '&TILEROW={y}' +
+        '&TILECOL={x}' +
+        `&tk=${encodedToken}`
+      );
+    });
+  }
+
   // 暴露给外部的方法
   addLayer(layer: maplibregl.LayerSpecification) {
     this.map.addLayer(layer);
@@ -271,7 +386,8 @@ export class FusionMap {
     this.loadingSubject.next({ type, loading: true });
 
     if (!this.map) {
-      this.baseMapProvider.switchMap(type)
+      this.baseMapProvider
+        .switchMap(type)
         .then(() => {
           this.loadingSubject.next({ type, loading: false });
           return void 0; // 满足 ESLint promise/always-return 规则
@@ -281,7 +397,7 @@ export class FusionMap {
           const normalizedError = normalizeError(error);
           this.errorSubject.next({
             type,
-            message: `切换到 ${type} 失败: ${normalizedError.message}`,
+            message: `Failed to switch to ${type}: ${normalizedError.message}`,
             error: normalizedError.code ? normalizedError : undefined,
             timestamp: Date.now()
           });
@@ -297,53 +413,56 @@ export class FusionMap {
       bearing: this.map.getBearing()
     };
 
-    this.baseMapProvider.switchMap(type, state).then(() => {
-      this.loadingSubject.next({ type, loading: false });
-      this.setProjection('mercator');
+    this.baseMapProvider
+      .switchMap(type, state)
+      .then(() => {
+        this.loadingSubject.next({ type, loading: false });
+        this.setProjection('mercator');
 
-      // Auto-switch projection
-      if (type === 'cesium') {
-        this.setProjection('globe');
-        if (this.map.getLayer('tianditu-base')) {
-          this.map.setLayoutProperty('tianditu-base', 'visibility', 'none');
+        // Auto-switch projection
+        if (type === 'cesium') {
+          this.setProjection('globe');
+          if (this.map.getLayer('tianditu-base')) {
+            this.map.setLayoutProperty('tianditu-base', 'visibility', 'none');
+          }
+          this.enableInteractions();
+        } else if (type === 'tianditu') {
+          this.setProjection('mercator');
+          if (this.map.getLayer('tianditu-base')) {
+            this.map.setLayoutProperty('tianditu-base', 'visibility', 'visible');
+          }
+          this.enableInteractions();
+        } else if (type === 'google') {
+          this.setProjection('mercator');
+          if (this.map.getLayer('tianditu-base')) {
+            this.map.setLayoutProperty('tianditu-base', 'visibility', 'none');
+          }
+          this.enableInteractions();
+        } else {
+          this.setProjection('mercator');
+          if (this.map.getLayer('tianditu-base')) {
+            this.map.setLayoutProperty('tianditu-base', 'visibility', 'none');
+          }
+          this.enableInteractions();
         }
-        this.enableInteractions();
-      } else if (type === 'tianditu') {
-        this.setProjection('mercator');
-        if (this.map.getLayer('tianditu-base')) {
-          this.map.setLayoutProperty('tianditu-base', 'visibility', 'visible');
-        }
-        this.enableInteractions();
-      } else if (type === 'google') {
-        this.setProjection('mercator');
-        if (this.map.getLayer('tianditu-base')) {
-          this.map.setLayoutProperty('tianditu-base', 'visibility', 'none');
-        }
-        this.enableInteractions();
-      } else {
-        this.setProjection('mercator');
-        if (this.map.getLayer('tianditu-base')) {
-          this.map.setLayoutProperty('tianditu-base', 'visibility', 'none');
-        }
-        this.enableInteractions();
-      }
-      return void 0; // 满足 ESLint promise/always-return 规则
-    }).catch((error) => {
-      this.loadingSubject.next({ type, loading: false });
-      const normalizedError = normalizeError(error);
-      this.errorSubject.next({
-        type,
-        message: `切换到 ${type} 失败: ${normalizedError.message}`,
-        error: normalizedError.code ? normalizedError : undefined,
-        timestamp: Date.now()
+        return void 0; // 满足 ESLint promise/always-return 规则
+      })
+      .catch((error) => {
+        this.loadingSubject.next({ type, loading: false });
+        const normalizedError = normalizeError(error);
+        this.errorSubject.next({
+          type,
+          message: `Failed to switch to ${type}: ${normalizedError.message}`,
+          error: normalizedError.code ? normalizedError : undefined,
+          timestamp: Date.now()
+        });
+        // Re-throw the error so the caller can handle it
+        throw error;
       });
-      // Re-throw the error so the caller can handle it
-      throw error;
-    });
   }
 
   private enableInteractions() {
-    this.map.setMaxPitch(60); // Restore default max pitch
+    this.map.setMaxPitch(this.maxPitchLimit);
     this.map.dragRotate.enable();
     this.map.touchZoomRotate.enableRotation();
   }
@@ -351,6 +470,51 @@ export class FusionMap {
   // 访问底层 MapLibre 实例（只读）
   getMapInstance() {
     return this.map;
+  }
+
+  getThirdPartyCameraState(): { type: MapType; pitch: number | null; heading: number | null } | null {
+    const type = this.baseMapProvider.getActiveMapType();
+    if (type === 'tianditu') {
+      return { type, pitch: null, heading: null };
+    }
+
+    const instance = this.baseMapProvider.getMapInstance(type);
+    if (!instance) {
+      return null;
+    }
+
+    try {
+      if (type === 'amap') {
+        const pitch = typeof instance.getPitch === 'function' ? instance.getPitch() : null;
+        const heading = typeof instance.getRotation === 'function' ? -instance.getRotation() : null;
+        return { type, pitch, heading };
+      }
+
+      if (type === 'baidu') {
+        const pitch = typeof instance.getTilt === 'function' ? instance.getTilt() : null;
+        const heading = typeof instance.getHeading === 'function' ? instance.getHeading() : null;
+        return { type, pitch, heading };
+      }
+
+      if (type === 'google') {
+        const pitch = typeof instance.getTilt === 'function' ? instance.getTilt() : null;
+        const heading = typeof instance.getHeading === 'function' ? instance.getHeading() : null;
+        return { type, pitch, heading };
+      }
+
+      if (type === 'cesium') {
+        const Cesium = (window as any).Cesium;
+        if (Cesium?.Math?.toDegrees && instance?.camera) {
+          const heading = Cesium.Math.toDegrees(instance.camera.heading);
+          const pitch = Cesium.Math.toDegrees(instance.camera.pitch) + 90;
+          return { type, pitch, heading };
+        }
+      }
+    } catch (e) {
+      console.warn('[FusionMap] Failed to read third-party camera state', e);
+    }
+
+    return { type, pitch: null, heading: null };
   }
 
   /**
@@ -367,7 +531,7 @@ export class FusionMap {
       console.warn('[FusionMap] destroy failed:', error.getDetailedMessage());
       this.errorSubject.next({
         type: 'amap',
-        message: '销毁地图失败',
+        message: 'Failed to destroy map',
         error: error.code ? error : undefined,
         timestamp: Date.now()
       });

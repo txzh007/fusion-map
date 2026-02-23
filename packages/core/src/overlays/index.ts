@@ -50,8 +50,11 @@ import { overlayFactory, createMarker, createPolyline } from './OverlayFactory';
 export { overlayFactory, createMarker, createPolyline };
 
 // 默认导出
-import OverlayFactoryClass from './OverlayFactory';
-import OverlayManagerClass from './OverlayManager';
+import { OverlayFactory as OverlayFactoryClass } from './OverlayFactory';
+import { OverlayManager as OverlayManagerClass } from './OverlayManager';
+import { BaseOverlay as BaseOverlayClass } from './BaseOverlay';
+import { Marker as MarkerClass } from './Marker';
+import { Polyline as PolylineClass } from './Polyline';
 
 const overlays = {
   // 工厂
@@ -62,9 +65,9 @@ const overlays = {
   createPolyline,
   
   // 类
-  BaseOverlay: BaseOverlay,
-  Marker: Marker,
-  Polyline: Polyline,
+  BaseOverlay: BaseOverlayClass,
+  Marker: MarkerClass,
+  Polyline: PolylineClass,
   OverlayFactory: OverlayFactoryClass,
   OverlayManager: OverlayManagerClass,
 };

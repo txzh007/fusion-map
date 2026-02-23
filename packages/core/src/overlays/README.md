@@ -11,10 +11,15 @@
 - ✅ **GeoJSON支持**：支持GeoJSON导入导出
 - ✅ **可扩展**：易于扩展新的覆盖物类型
 
+## 当前实现状态
+
+- 已实现：`Marker`、`Polyline`、`OverlayManager`
+- 计划中：`Polygon`、`Circle`、`Rectangle`、`InfoWindow`、`GeoJSON`、`SVGOverlay`
+
 ## 安装
 
 ```bash
-npm install @fusion-map/core
+npm install fusion-map
 ```
 
 ## 快速开始
@@ -22,8 +27,7 @@ npm install @fusion-map/core
 ### 1. 扩展FusionMap以支持覆盖物
 
 ```typescript
-import { FusionMap } from '@fusion-map/core';
-import { extendFusionMapWithOverlays } from '@fusion-map/core/overlays';
+import { FusionMap, extendFusionMapWithOverlays } from 'fusion-map';
 
 // 扩展FusionMap以支持覆盖物API
 extendFusionMapWithOverlays();
@@ -480,7 +484,7 @@ overlays.getManager().on('clusteringChanged', (event) => {
 #### 使用工厂
 
 ```typescript
-import { overlayFactory, createMarker, createPolyline } from '@fusion-map/core/overlays';
+import { overlayFactory, createMarker, createPolyline } from 'fusion-map';
 
 // 创建标记
 const marker = createMarker({
@@ -506,8 +510,8 @@ const manager = overlayFactory.createManager();
 ### 1. 自定义覆盖物
 
 ```typescript
-import { BaseOverlay } from '@fusion-map/core/overlays';
-import type { IOverlay, OverlayOptions } from '@fusion-map/core/overlays';
+import { BaseOverlay } from 'fusion-map';
+import type { IOverlay, OverlayOptions } from 'fusion-map';
 
 interface CustomOverlayOptions extends OverlayOptions {
   customProperty: string;

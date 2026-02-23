@@ -29,7 +29,7 @@ describe('FusionMap', () => {
     it('应该抛出错误当容器不存在时', () => {
       vi.spyOn(document, 'getElementById').mockReturnValue(null);
 
-      expect(() => new FusionMap('non-existent')).toThrow('Container non-existent not found');
+      expect(() => new FusionMap('non-existent')).toThrow('Container element with ID "non-existent" not found');
     });
 
     it('应该创建容器结构', () => {

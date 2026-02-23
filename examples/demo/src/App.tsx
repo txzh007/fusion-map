@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Box,
   Button,
@@ -20,8 +20,6 @@ import {
   Typography
 } from '@mui/material';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
-import ExploreIcon from '@mui/icons-material/Explore';
-import PlaceIcon from '@mui/icons-material/Place';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import MapIcon from '@mui/icons-material/Map';
 import { createFusionMap, FusionMap } from 'fusion-map';
@@ -35,6 +33,12 @@ type MapState = {
   pitch: number;
   bearing: number;
   center: [number, number];
+};
+
+type ThirdPartyCameraState = {
+  type: BaseMap;
+  pitch: number | null;
+  heading: number | null;
 };
 
 const apiGroups = [
@@ -61,8 +65,8 @@ export default function App() {
   const [session, setSession] = useState(0);
   const [zoomOffset, setZoomOffset] = useState(0);
   const [cesiumScale, setCesiumScale] = useState(1.9);
-  const [coords, setCoords] = useState({ lng: defaultCenter[0], lat: defaultCenter[1] });
-  const [pixel, setPixel] = useState({ x: 0, y: 0 });
+  const [referenceOpacity, setReferenceOpacity] = useState(0.5);
+  const [thirdPartyCamera, setThirdPartyCamera] = useState<ThirdPartyCameraState | null>(null);
   const [tokens, setTokens] = useState({
     amap: readToken('fm_amap_key'),
     baidu: readToken('fm_baidu_key'),
@@ -75,7 +79,6 @@ export default function App() {
 
   useEffect(() => {
     localStorage.setItem('fm_current_map', baseMap);
-    setProjection(baseMap === 'cesium' ? 'globe' : 'mercator');
     mapRef.current?.switchBaseMap(baseMap);
   }, [baseMap]);
 
@@ -138,6 +141,16 @@ export default function App() {
 
     ['move', 'zoom', 'pitch', 'rotate'].forEach(attach);
 
+    const syncThirdPartyCamera = () => {
+      const state = (instance as any).getThirdPartyCameraState?.();
+      if (state) {
+        setThirdPartyCamera(state);
+      }
+    };
+
+    syncThirdPartyCamera();
+    const thirdPartyTimer = window.setInterval(syncThirdPartyCamera, 200);
+
     mapRef.current = instance;
 
     // Keep Cesium calibration aligned
@@ -147,9 +160,15 @@ export default function App() {
     if (typeof (instance as any).setCesiumScaleFactor === 'function') {
       (instance as any).setCesiumScaleFactor(cesiumScale);
     }
+    if (typeof (instance as any).setReferenceOpacity === 'function') {
+      (instance as any).setReferenceOpacity(referenceOpacity);
+    }
+    if (typeof (instance as any).setProjection === 'function') {
+      (instance as any).setProjection(projection);
+    }
 
     // Ensure initial base map
-    setTimeout(() => {
+    const initialSwitchTimer = window.setTimeout(() => {
       try {
         if (typeof (instance as any).switchBaseMap === 'function') {
           (instance as any).switchBaseMap(baseMap);
@@ -160,6 +179,9 @@ export default function App() {
     }, 60);
 
     return () => {
+      window.clearTimeout(initialSwitchTimer);
+      window.clearInterval(thirdPartyTimer);
+
       try {
         if (typeof (instance as any).destroy === 'function') {
           (instance as any).destroy();
@@ -184,6 +206,14 @@ export default function App() {
     mapRef.current?.setCesiumScaleFactor(cesiumScale);
   }, [cesiumScale]);
 
+  useEffect(() => {
+    (mapRef.current as any)?.setReferenceOpacity?.(referenceOpacity);
+  }, [referenceOpacity]);
+
+  useEffect(() => {
+    mapRef.current?.setProjection(projection);
+  }, [projection]);
+
   const handleMapSwitch = (_: any, value: BaseMap | null) => {
     if (!value) return;
     // Validate tokens required for certain providers
@@ -201,30 +231,36 @@ export default function App() {
       return;
     }
 
+    if (value === 'google' && !tokens.googleMapId) {
+      setSnackbar({ open: true, message: 'Google Map ID 未填写：将以基础模式运行，部分 3D/矢量能力可能不可用' });
+    }
+
     setBaseMap(value);
   };
 
-  const handleLngLatToPixel = () => {
-    const map = mapRef.current?.getMapInstance();
-    if (!map) return;
-    const { x, y } = map.project([coords.lng, coords.lat]);
-    setPixel({ x: Number(x.toFixed(2)), y: Number(y.toFixed(2)) });
-  };
-
-  const handlePixelToLngLat = () => {
-    const map = mapRef.current?.getMapInstance();
-    if (!map) return;
-    const point = map.unproject([pixel.x, pixel.y]);
-    setCoords({ lng: Number(point.lng.toFixed(6)), lat: Number(point.lat.toFixed(6)) });
-  };
-
-  const handleFlyToDemo = () => {
-    const map = mapRef.current?.getMapInstance();
-    if (!map) return;
-    map.flyTo({ center: defaultCenter, zoom: 15, pitch: 60, bearing: 22, duration: 1200 });
-  };
-
-  const projectionLabel = useMemo(() => (projection === 'globe' ? 'Globe' : 'Mercator'), [projection]);
+  const projectionLabel = projection === 'globe' ? 'Globe' : 'Mercator';
+  const centerLng = mapState.center[0].toFixed(6);
+  const centerLat = mapState.center[1].toFixed(6);
+  const thirdPartyPitchLabel = thirdPartyCamera?.pitch == null ? '--' : `${thirdPartyCamera.pitch.toFixed(1)}°`;
+  const thirdPartyHeadingLabel = thirdPartyCamera?.heading == null ? '--' : `${thirdPartyCamera.heading.toFixed(1)}°`;
+  const lensMetric = (label: string, value: string, emphasize = false) => (
+    <Box
+      sx={{
+        px: 1,
+        py: 0.75,
+        borderRadius: 1,
+        border: theme => `1px solid ${theme.palette.divider}`,
+        backgroundColor: emphasize ? 'action.selected' : 'background.paper'
+      }}
+    >
+      <Typography variant="caption" color="text.secondary" sx={{ display: 'block', lineHeight: 1.1 }}>
+        {label}
+      </Typography>
+      <Typography variant="body2" fontWeight={700} sx={{ mt: 0.25, lineHeight: 1.2 }}>
+        {value}
+      </Typography>
+    </Box>
+  );
 
   return (
     <Box className="app-shell">
@@ -253,21 +289,13 @@ export default function App() {
 
       <Box className="map-stage">
         <Box id={MAP_CONTAINER_ID} className="map-canvas" />
-        <Box className="map-floating">
-          <Stack direction="row" spacing={1} alignItems="center" className="badge-row">
-            <Chip label={`Projection: ${projectionLabel}`} size="small" color="primary" variant="outlined" />
-            <Chip label={`Zoom ${mapState.zoom.toFixed(1)}`} size="small" variant="outlined" />
-            <Chip label={`Pitch ${mapState.pitch.toFixed(0)}°`} size="small" variant="outlined" />
-            <Chip label={`Bearing ${mapState.bearing.toFixed(0)}°`} size="small" variant="outlined" />
-          </Stack>
-        </Box>
       </Box>
 
       <Paper elevation={2} className="panel inspector-panel">
         <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 1 }}>
           <Stack>
             <Typography variant="subtitle1" fontWeight={700}>调试面板</Typography>
-            <Typography variant="caption" color="text.secondary">右侧用于凭据、投影、坐标调试</Typography>
+            <Typography variant="caption" color="text.secondary">右侧用于凭据、投影、联动调试</Typography>
           </Stack>
           <Tooltip title="重建环境">
             <IconButton onClick={() => setSession(v => v + 1)} size="small" color="primary">
@@ -275,6 +303,56 @@ export default function App() {
             </IconButton>
           </Tooltip>
         </Stack>
+
+        <Box className="badge-row" sx={{ mb: 1, p: 1.25 }}>
+          <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1 }}>
+            <Typography variant="subtitle2" fontWeight={700}>镜头信息</Typography>
+            <Chip label="实时" size="small" color="success" variant="outlined" />
+          </Stack>
+
+          <Stack spacing={1}>
+            <Box
+              sx={{
+                p: 1,
+                borderRadius: 1.5,
+                border: theme => `1px solid ${theme.palette.divider}`,
+                backgroundColor: 'action.hover'
+              }}
+            >
+              <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 0.75 }}>
+                <Typography variant="caption" color="text.secondary">MapLibre</Typography>
+                <Typography variant="caption" color="text.secondary">WGS84 (EPSG:4326)</Typography>
+              </Stack>
+              <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 0.75 }}>
+                {lensMetric('Projection', projectionLabel, true)}
+                {lensMetric('Zoom', mapState.zoom.toFixed(1))}
+                {lensMetric('Pitch', `${mapState.pitch.toFixed(1)}°`)}
+                {lensMetric('Bearing', `${mapState.bearing.toFixed(1)}°`)}
+                {lensMetric('Lng', centerLng)}
+                {lensMetric('Lat', centerLat)}
+              </Box>
+            </Box>
+
+            <Box
+              sx={{
+                p: 1,
+                borderRadius: 1.5,
+                border: theme => `1px solid ${theme.palette.divider}`,
+                backgroundColor: 'action.hover'
+              }}
+            >
+              <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 0.75 }}>
+                <Typography variant="caption" color="text.secondary">第三方底图</Typography>
+                <Typography variant="caption" color="text.secondary">{(thirdPartyCamera?.type || baseMap).toUpperCase()}</Typography>
+              </Stack>
+              <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 0.75 }}>
+                {lensMetric('Source', thirdPartyCamera?.type || baseMap, true)}
+                {lensMetric('Pitch', thirdPartyPitchLabel)}
+                {lensMetric('Heading', thirdPartyHeadingLabel)}
+              </Box>
+            </Box>
+          </Stack>
+        </Box>
 
         <Stack spacing={2}>
           <Box>
@@ -292,6 +370,24 @@ export default function App() {
               <ToggleButton value="google">谷歌</ToggleButton>
               <ToggleButton value="tianditu">天地图</ToggleButton>
               <ToggleButton value="cesium">Cesium</ToggleButton>
+            </ToggleButtonGroup>
+          </Box>
+
+          <Box>
+            <Typography variant="caption" color="text.secondary">MapLibre 投影</Typography>
+            <ToggleButtonGroup
+              value={projection}
+              exclusive
+              fullWidth
+              size="small"
+              onChange={(_, value: 'globe' | 'mercator' | null) => {
+                if (!value) return;
+                setProjection(value);
+              }}
+              sx={{ mt: 0.5 }}
+            >
+              <ToggleButton value="globe">球面 Globe</ToggleButton>
+              <ToggleButton value="mercator">墨卡托 Mercator</ToggleButton>
             </ToggleButtonGroup>
           </Box>
 
@@ -353,61 +449,18 @@ export default function App() {
               onChange={(_, v) => setCesiumScale(v as number)}
               size="small"
             />
-          </Box>
-
-          <Divider flexItem />
-
-          <Box>
-            <Stack direction="row" alignItems="center" justifyContent="space-between" mb={1}>
-              <Typography variant="caption" color="text.secondary">坐标调试</Typography>
-              <Stack direction="row" spacing={1}>
-                <Button size="small" variant="outlined" startIcon={<ExploreIcon />} onClick={handleFlyToDemo}>
-                  飞到示例点
-                </Button>
-                <Button size="small" variant="contained" color="secondary" startIcon={<PlaceIcon />} onClick={handleLngLatToPixel}>
-                  {"经纬 -> 像素"}
-                </Button>
-                <Button size="small" variant="outlined" onClick={handlePixelToLngLat}>
-                  {"像素 -> 经纬"}
-                </Button>
-              </Stack>
+            <Stack direction="row" alignItems="center" justifyContent="space-between">
+              <Typography variant="caption" color="text.secondary">参考底图透明度</Typography>
+              <Typography variant="caption" color="text.secondary">{Math.round(referenceOpacity * 100)}%</Typography>
             </Stack>
-            <Stack direction="row" spacing={1} mb={1}>
-              <TextField
-                size="small"
-                label="Longitude"
-                type="number"
-                value={coords.lng}
-                onChange={e => setCoords({ ...coords, lng: Number(e.target.value) })}
-                fullWidth
-              />
-              <TextField
-                size="small"
-                label="Latitude"
-                type="number"
-                value={coords.lat}
-                onChange={e => setCoords({ ...coords, lat: Number(e.target.value) })}
-                fullWidth
-              />
-            </Stack>
-            <Stack direction="row" spacing={1}>
-              <TextField
-                size="small"
-                label="Pixel X"
-                type="number"
-                value={pixel.x}
-                onChange={e => setPixel({ ...pixel, x: Number(e.target.value) })}
-                fullWidth
-              />
-              <TextField
-                size="small"
-                label="Pixel Y"
-                type="number"
-                value={pixel.y}
-                onChange={e => setPixel({ ...pixel, y: Number(e.target.value) })}
-                fullWidth
-              />
-            </Stack>
+            <Slider
+              min={0}
+              max={1}
+              step={0.05}
+              value={referenceOpacity}
+              onChange={(_, v) => setReferenceOpacity(v as number)}
+              size="small"
+            />
           </Box>
         </Stack>
       </Paper>

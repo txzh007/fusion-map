@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { BaseMapProvider, MapError, MapLoadingState } from '../services/BaseMapProvider';
 import { Container } from '../di/Container';
+import { ErrorCode } from '../errors';
 
 describe('BaseMapProvider: Error Handling', () => {
   let provider: BaseMapProvider;
@@ -69,7 +70,7 @@ describe('BaseMapProvider: Error Handling', () => {
 
       const error = await errorPromise;
       expect(error.type).toBe('amap');
-      expect(error.message).toContain('请提供高德地图 Key');
+      expect(error.message).toContain('Token is required for Amap map provider');
     });
 
     it('应该在 Token 缺失时渲染错误 UI', async () => {
@@ -93,53 +94,66 @@ describe('BaseMapProvider: Error Handling', () => {
         });
       });
 
-      provider.switchMap('amap');
+provider.switchMap('amap');
 
       const error = await errorPromise;
-      expect(error.message).toContain('容器未设置');
+      expect(error.message).toContain('Container is not set');
     });
   });
 
   describe('脚本加载失败', () => {
-    it('应该在脚本加载失败时重试', async () => {
-      const errors: MapError[] = [];
-      const errorPromise = new Promise<MapError>((resolve) => {
-        provider.errors$.subscribe((error) => {
-          errors.push(error);
-          if (error.message.includes('脚本加载失败')) {
-            resolve(error);
-          }
-        });
-      });
+    it('应该失败后重试并最终抛出 SCRIPT_LOAD_FAILED', async () => {
+      (provider as any).maxRetries = 2;
+      (provider as any).scriptRetryDelayMs = 1;
+      (provider as any).scriptTimeoutMs = 200;
 
-      // Mock document.head.appendChild to simulate script load failure
       const appendChildSpy = vi.spyOn(document.head, 'appendChild').mockImplementation((node: any) => {
-        // 模拟脚本加载失败
         setTimeout(() => {
-          if (node.onerror) node.onerror(new Error('Network error'));
-        }, 10);
+          if (node.onerror) {node.onerror(new Error('Network error'));}
+        }, 0);
         return node;
       });
 
-      // 设置 Token 以避免 Token 缺失错误
-      provider.setTokens({ amap: 'test-key' });
+      await expect((provider as any).loadScript('https://example.com/fail.js'))
+        .rejects
+        .toMatchObject({ code: ErrorCode.SCRIPT_LOAD_FAILED });
 
-      try {
-        await provider.switchMap('amap');
-      } catch (e) {
-        // 预期会抛出错误
-      }
+      expect(appendChildSpy).toHaveBeenCalledTimes(3);
+      appendChildSpy.mockRestore();
+    });
 
-      // 等待错误上报
-      await errorPromise;
+    it('应该在超时时抛出 TIMEOUT', async () => {
+      (provider as any).maxRetries = 0;
+      (provider as any).scriptTimeoutMs = 5;
 
-      // 验证错误被上报
-      expect(errors.length).toBeGreaterThan(0);
-      const scriptError = errors.find(e => e.message.includes('脚本加载失败'));
-      expect(scriptError).toBeDefined();
+      const appendChildSpy = vi.spyOn(document.head, 'appendChild').mockImplementation((node: any) => node);
+
+      await expect((provider as any).loadScript('https://example.com/timeout.js'))
+        .rejects
+        .toMatchObject({ code: ErrorCode.TIMEOUT });
 
       appendChildSpy.mockRestore();
-    }, 15000); // 增加超时时间
+    });
+
+    it('应该复用同一脚本的并发加载请求', async () => {
+      (provider as any).maxRetries = 0;
+      (provider as any).scriptTimeoutMs = 200;
+
+      const appendChildSpy = vi.spyOn(document.head, 'appendChild').mockImplementation((node: any) => {
+        setTimeout(() => {
+          if (node.onload) {node.onload(new Event('load'));}
+        }, 0);
+        return node;
+      });
+
+      const p1 = (provider as any).loadScript('https://example.com/same.js');
+      const p2 = (provider as any).loadScript('https://example.com/same.js');
+
+      await Promise.all([p1, p2]);
+
+      expect(appendChildSpy).toHaveBeenCalledTimes(1);
+      appendChildSpy.mockRestore();
+    });
   });
 
   describe('SDK 加载失败', () => {
@@ -158,7 +172,7 @@ describe('BaseMapProvider: Error Handling', () => {
 
       const error = await errorPromise;
       expect(error.type).toBe('amap');
-      expect(error.message).toContain('高德地图加载失败');
+      expect(error.message).toContain('Failed to load Amap');
     });
   });
 
@@ -172,7 +186,7 @@ describe('BaseMapProvider: Error Handling', () => {
         });
       });
 
-      provider.updateCamera({
+provider.updateCamera({
         center: [116.397, 39.918],
         zoom: 12,
         pitch: 45,
@@ -180,7 +194,7 @@ describe('BaseMapProvider: Error Handling', () => {
       });
 
       const error = await errorPromise;
-      expect(error.message).toContain('容器未设置');
+      expect(error.message).toContain('Container is not set');
     });
   });
 

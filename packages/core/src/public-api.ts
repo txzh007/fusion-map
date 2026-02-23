@@ -42,6 +42,11 @@ export interface MapLoadingState {
  */
 export interface FusionMapConfig {
   /**
+   * 初始底图类型（默认：amap）
+   */
+  initialBaseMap?: MapType;
+
+  /**
    * MapLibre 地图选项
    */
   mapOptions?: Partial<import('maplibre-gl').MapOptions>;

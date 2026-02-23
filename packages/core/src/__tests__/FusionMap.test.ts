@@ -48,6 +48,14 @@ describe('FusionMap', () => {
       // 这里我们验证 map 的 baseMapProvider 存在
       expect((map as any).baseMapProvider).toBeDefined();
     });
+
+    it('应该支持初始化时指定 Google 底图', () => {
+      const map = new FusionMap('test-container', {
+        initialBaseMap: 'google'
+      } as any);
+
+      expect((map as any).baseMapProvider.getActiveMapType()).toBe('google');
+    });
   });
 
   describe('getMapInstance', () => {
@@ -70,6 +78,15 @@ describe('FusionMap', () => {
       await map.switchBaseMap('amap');
 
       expect(switchMapSpy).toHaveBeenCalledWith('amap', expect.any(Object));
+    });
+
+    it('应该返回 Promise 以支持 await', () => {
+      const map = new FusionMap('test-container');
+      vi.spyOn((map as any).baseMapProvider, 'switchMap').mockResolvedValue(undefined);
+
+      const result = map.switchBaseMap('amap');
+
+      expect(result).toBeInstanceOf(Promise);
     });
 
     it('应该在没有 map 时只切换底图', async () => {

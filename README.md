@@ -47,6 +47,7 @@ This means you can write your visualization code **solely using the standard Map
   - Synchronizes Pitch and Bearing (Rotation) where supported.
   - Prevents Gimbal Lock in Cesium.
 - **Coordinate Transformation**: Built-in support for WGS84, GCJ02, and BD09 conversions using `gcoord`.
+- **Unified Overlay Abstraction (Planned)**: Future MapLibre-first wrappers for Marker/Polyline/Polygon/Circle to enable true “**write once, run everywhere**” overlay APIs across providers.
 
 ## 📦 Installation
 
@@ -66,6 +67,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 
 const map = new FusionMap({
   container: 'map-container', // HTML Element ID
+  initialBaseMap: 'google', // Optional: start directly with Google
   mapOptions: {
     style: 'https://demotiles.maplibre.org/style.json', // Your MapLibre Style
     center: [116.397, 39.918],
@@ -87,15 +89,17 @@ const map = new FusionMap({
 
 Switching providers is instant and maintains your current camera view.
 
+`switchBaseMap` returns a Promise; if you need strict sync timing, use `await`.
+
 ```typescript
 // Switch to Amap (Auto-converts WGS84 -> GCJ02)
-map.switchBaseMap('amap');
+await map.switchBaseMap('amap');
 
 // Switch to Cesium 3D Globe
-map.switchBaseMap('cesium');
+await map.switchBaseMap('cesium');
 
 // Switch to Google Maps
-map.switchBaseMap('google');
+await map.switchBaseMap('google');
 ```
 
 ### 3. Adding Layers
@@ -139,6 +143,13 @@ map.map.addLayer({
   - Symptom: around low-zoom or threshold transitions, provider SDKs may apply internal camera constraints (for example max-tilt clamping or animated interpolation) and briefly override pitch.
   - Current mitigation: Fusion Map applies provider-side `maxTilt` clamping, no-animation writes, and frame-level reapplication where needed to reduce desync frequency.
   - Note: this is a third-party SDK behavior difference, so strict 100% pitch consistency is not guaranteed under all devices/zoom states.
+
+## 🗺️ Overlay Roadmap (MapLibre First)
+
+- **Goal**: use MapLibre as the canonical overlay semantics layer and adapt provider differences behind Fusion Map.
+- **Phase 1 scope**: `Marker`, `Polyline`, `Polygon`, `Circle` with unified events, styling model, and lifecycle.
+- **Design principle**: application code targets Fusion Map overlay APIs only; provider adapters handle capability mapping and graceful fallback.
+- **Outcome**: less duplicated implementation and vendor lock-in, with practical “write once, run everywhere” for overlays.
 
 ## 🤝 Contributing
 

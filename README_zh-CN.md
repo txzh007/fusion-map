@@ -47,6 +47,7 @@ graph TD
   - 在支持的平台上同步俯仰角 (Pitch) 和旋转角 (Bearing)。
   - 防止 Cesium 中的万向节死锁 (Gimbal Lock)。
 - **坐标转换**: 内置 `gcoord` 支持 WGS84, GCJ02, 和 BD09 之间的自动转换。
+- **覆盖物统一封装（规划中）**: 未来将基于 MapLibre 封装 Marker/Polyline/Polygon/Circle 等覆盖物能力，实现“**一次编写，到处运行**”的跨底图覆盖物 API。
 
 ## 📦 安装
 
@@ -66,6 +67,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 
 const map = new FusionMap({
   container: 'map-container', // HTML 元素 ID
+  initialBaseMap: 'google', // 可选：初始化直接使用 Google 底图
   mapOptions: {
     style: 'https://demotiles.maplibre.org/style.json', // 您的 MapLibre 样式
     center: [116.397, 39.918],
@@ -87,15 +89,17 @@ const map = new FusionMap({
 
 切换底图是即时的，并会保持当前的相机视角。
 
+`switchBaseMap` 会返回 Promise；如果你需要严格的同步时序，请使用 `await`。
+
 ```typescript
 // 切换到高德地图 (自动转换 WGS84 -> GCJ02)
-map.switchBaseMap('amap');
+await map.switchBaseMap('amap');
 
 // 切换到 Cesium 3D 地球
-map.switchBaseMap('cesium');
+await map.switchBaseMap('cesium');
 
 // 切换到 Google Maps
-map.switchBaseMap('google');
+await map.switchBaseMap('google');
 ```
 
 ### 3. 添加图层
@@ -139,6 +143,13 @@ map.map.addLayer({
   - 现象：在低层级或缩放切换临界值附近，底图 SDK 可能触发内部相机约束（如最大俯仰钳制、动画插值回写），导致 Pitch 与 MapLibre 出现瞬时偏差。
   - 当前处理：Fusion Map 已在各适配器中增加 `maxTilt` 约束、无动画写入、必要的下一帧回写，尽可能降低不同步概率。
   - 说明：该问题属于第三方 SDK 行为差异，无法在所有设备与缩放状态下做到 100% 严格一致。
+
+## 🗺️ 覆盖物路线图（MapLibre First）
+
+- **目标**：以 MapLibre 作为覆盖物统一语义层，对底图差异做适配，实现覆盖物能力跨高德/百度/Google/Cesium 的一致调用。
+- **首批范围**：`Marker`、`Polyline`、`Polygon`、`Circle`（统一事件、样式与生命周期）。
+- **设计原则**：业务侧只面向 Fusion Map 覆盖物 API 编码，provider 侧只负责能力映射与降级策略。
+- **收益**：减少重复实现与底图耦合，真正做到“覆盖物一次开发，多底图复用”。
 
 ## 🤝 贡献代码
 

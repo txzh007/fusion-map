@@ -204,3 +204,13 @@
 - 文档：README 对齐、能力边界说明、安全接入建议。
 - 测试：错误路径新增用例、回归测试结果、coverage 报告。
 
+---
+
+## 8) Agent Skills（独立文档）
+
+为便于维护与复用，Agent Skills 已拆分到独立文件：
+
+- [.agents/skills/fusion-map-agent-skills.md](.agents/skills/fusion-map-agent-skills.md)
+
+该文档包含：技能矩阵、触发条件、执行流程、验收标准、可复用 prompt 模板与成熟度分级。
+

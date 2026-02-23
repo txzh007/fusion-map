@@ -3,7 +3,7 @@ import { MapService, Inject } from './decorators';
 import { SyncEngine } from './services/SyncEngine';
 import { BaseMapProvider, type MapType } from './services/BaseMapProvider';
 import type { FusionMapConfig, MapLoadingState, GenericEventOn } from './types';
-import { ErrorCode, createContainerNotFoundError, normalizeError, type MapError } from './errors';
+import { createContainerNotFoundError, normalizeError, type MapError } from './errors';
 import { Subject } from 'rxjs';
 
 // @ts-ignore - CSS import for maplibre-gl styles
@@ -213,8 +213,31 @@ export class FusionMap {
     // 3. 启动同步引擎
     this.syncEngine.bind(this.map);
 
-    // 4. 初始化默认底图
-    this.baseMapProvider.switchMap('amap');
+    // 4. 初始化默认底图（支持配置初始底图）
+    const initialBaseMap = options.initialBaseMap ?? 'amap';
+    const initialCenter = this.map.getCenter();
+    const initialView = {
+      center: [initialCenter.lng, initialCenter.lat] as [number, number],
+      zoom: this.map.getZoom(),
+      pitch: this.map.getPitch(),
+      bearing: this.map.getBearing()
+    };
+
+    this.baseMapProvider
+      .switchMap(initialBaseMap, initialView)
+      .then(() => {
+        this.applyBaseMapPresentation(initialBaseMap);
+        return;
+      })
+      .catch((error) => {
+        const normalizedError = normalizeError(error);
+        this.errorSubject.next({
+          type: initialBaseMap,
+          message: `Failed to initialize ${initialBaseMap}: ${normalizedError.message}`,
+          error: normalizedError.code ? normalizedError : undefined,
+          timestamp: Date.now()
+        });
+      });
 
     console.log('[FusionMap] Ready.');
   }
@@ -296,6 +319,27 @@ export class FusionMap {
     }
 
     this.map.setMaxPitch(this.maxPitchLimit);
+  }
+
+  private applyBaseMapPresentation(type: MapType) {
+    if (!this.map) {
+      return;
+    }
+
+    if (type === 'cesium') {
+      this.setProjection('globe');
+      if (this.map.getLayer('tianditu-base')) {
+        this.map.setLayoutProperty('tianditu-base', 'visibility', 'none');
+      }
+      this.enableInteractions();
+      return;
+    }
+
+    this.setProjection('mercator');
+    if (this.map.getLayer('tianditu-base')) {
+      this.map.setLayoutProperty('tianditu-base', 'visibility', type === 'tianditu' ? 'visible' : 'none');
+    }
+    this.enableInteractions();
   }
 
   /**
@@ -382,15 +426,15 @@ export class FusionMap {
     this.map.addLayer(layer);
   }
 
-  switchBaseMap(type: MapType) {
+  switchBaseMap(type: MapType): Promise<void> {
     this.loadingSubject.next({ type, loading: true });
 
     if (!this.map) {
-      this.baseMapProvider
+      return this.baseMapProvider
         .switchMap(type)
         .then(() => {
           this.loadingSubject.next({ type, loading: false });
-          return void 0; // 满足 ESLint promise/always-return 规则
+          return;
         })
         .catch((error) => {
           this.loadingSubject.next({ type, loading: false });
@@ -401,8 +445,8 @@ export class FusionMap {
             error: normalizedError.code ? normalizedError : undefined,
             timestamp: Date.now()
           });
+          throw error;
         });
-      return;
     }
 
     const center = this.map.getCenter();
@@ -413,39 +457,12 @@ export class FusionMap {
       bearing: this.map.getBearing()
     };
 
-    this.baseMapProvider
+    return this.baseMapProvider
       .switchMap(type, state)
       .then(() => {
         this.loadingSubject.next({ type, loading: false });
-        this.setProjection('mercator');
-
-        // Auto-switch projection
-        if (type === 'cesium') {
-          this.setProjection('globe');
-          if (this.map.getLayer('tianditu-base')) {
-            this.map.setLayoutProperty('tianditu-base', 'visibility', 'none');
-          }
-          this.enableInteractions();
-        } else if (type === 'tianditu') {
-          this.setProjection('mercator');
-          if (this.map.getLayer('tianditu-base')) {
-            this.map.setLayoutProperty('tianditu-base', 'visibility', 'visible');
-          }
-          this.enableInteractions();
-        } else if (type === 'google') {
-          this.setProjection('mercator');
-          if (this.map.getLayer('tianditu-base')) {
-            this.map.setLayoutProperty('tianditu-base', 'visibility', 'none');
-          }
-          this.enableInteractions();
-        } else {
-          this.setProjection('mercator');
-          if (this.map.getLayer('tianditu-base')) {
-            this.map.setLayoutProperty('tianditu-base', 'visibility', 'none');
-          }
-          this.enableInteractions();
-        }
-        return void 0; // 满足 ESLint promise/always-return 规则
+        this.applyBaseMapPresentation(type);
+        return;
       })
       .catch((error) => {
         this.loadingSubject.next({ type, loading: false });

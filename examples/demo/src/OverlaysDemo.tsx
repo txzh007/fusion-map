@@ -33,7 +33,9 @@ import VisibilityIcon from '@mui/icons-material/Visibility';
 import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 import DownloadIcon from '@mui/icons-material/Download';
 import UploadIcon from '@mui/icons-material/Upload';
-import { createFusionMap, FusionMap } from 'fusion-map';
+import { createFusionMap, FusionMap, extendFusionMapWithOverlays } from 'fusion-map';
+
+extendFusionMapWithOverlays();
 
 const MAP_CONTAINER_ID = 'fusion-map-overlays';
 
@@ -50,7 +52,7 @@ interface OverlayItem {
 const defaultCenter: [number, number] = [116.3974, 39.9093];
 
 export default function OverlaysDemo() {
-  const mapRef = useRef<FusionMap | null>(null);
+  const mapRef = useRef<(FusionMap & { getOverlays: () => any }) | null>(null);
   const [overlays, setOverlays] = useState<OverlayItem[]>([]);
   const [selectedOverlay, setSelectedOverlay] = useState<string>('');
   const [session, setSession] = useState(0);
@@ -62,7 +64,7 @@ export default function OverlaysDemo() {
   const [newMarkerIcon, setNewMarkerIcon] = useState('https://example.com/marker.png');
 
   // 新折线状态
-  const [newPolylinePath, setNewPolylinePath] = useState([
+  const [newPolylinePath, setNewPolylinePath] = useState<[number, number][]>([
     [116.3974, 39.9093],
     [116.4074, 39.9193],
     [116.4174, 39.9293],
@@ -87,7 +89,7 @@ export default function OverlaysDemo() {
       }
     });
 
-    mapRef.current = instance;
+    mapRef.current = instance as FusionMap & { getOverlays: () => any };
 
     return () => {
       try {
@@ -112,7 +114,7 @@ export default function OverlaysDemo() {
     const manager = map.getOverlays().getManager();
     const allOverlays = manager.getAll();
 
-    const overlayList: OverlayItem[] = allOverlays.map(overlay => ({
+    const overlayList: OverlayItem[] = allOverlays.map((overlay: any) => ({
       id: overlay.getId(),
       type: overlay.getType() as OverlayType,
       name: overlay.getProperty('name') || overlay.getId(),
@@ -261,7 +263,7 @@ export default function OverlaysDemo() {
 
     const map = mapRef.current;
     const manager = map.getOverlays().getManager();
-    const stats = manager.getTypeStats!();
+    const stats = (manager as any).getTypeStats?.() || {};
 
     return {
       total: manager.getCount(),
@@ -276,7 +278,7 @@ export default function OverlaysDemo() {
 
     const map = mapRef.current;
     const manager = map.getOverlays().getManager();
-    return manager.getVisibleCount!();
+    return (manager as any).getVisibleCount?.() ?? manager.getAll().filter((item: any) => item.isVisible()).length;
   };
 
   return (
@@ -402,7 +404,7 @@ export default function OverlaysDemo() {
                 value={JSON.stringify(newPolylinePath)}
                 onChange={e => {
                   try {
-                    const path = JSON.parse(e.target.value);
+                    const path = JSON.parse(e.target.value) as [number, number][];
                     setNewPolylinePath(path);
                   } catch (e) {
                     // 忽略解析错误

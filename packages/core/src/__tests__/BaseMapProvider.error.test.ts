@@ -12,13 +12,11 @@ describe('BaseMapProvider: Error Handling', () => {
     (Container as any).instances.clear();
 
     provider = new BaseMapProvider();
-    mockContainer = {
-      innerHTML: '',
-      clientHeight: 800,
-      appendChild: vi.fn(),
-      removeChild: vi.fn(),
-      querySelector: vi.fn()
-    } as any;
+    mockContainer = document.createElement('div');
+    Object.defineProperty(mockContainer, 'clientHeight', {
+      value: 800,
+      configurable: true
+    });
     provider.setContainer(mockContainer);
   });
 
@@ -71,16 +69,17 @@ describe('BaseMapProvider: Error Handling', () => {
       const error = await errorPromise;
       expect(error.type).toBe('amap');
       expect(error.message).toContain('Token is required for Amap map provider');
+      expect((error.error as any)?.code).toBe(ErrorCode.TOKEN_MISSING);
     });
 
     it('应该在 Token 缺失时渲染错误 UI', async () => {
+      const renderErrorSpy = vi.spyOn(provider as any, 'renderError');
       await provider.switchMap('amap');
 
-      // 等待一点时间让错误 UI 渲染
-      await new Promise(resolve => setTimeout(resolve, 100));
-
-      expect(mockContainer.innerHTML).toContain('AMAP');
-      expect(mockContainer.innerHTML).toContain('Please provide Amap Key (JS API)');
+      expect(renderErrorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Token is required for Amap map provider'),
+        'amap'
+      );
     });
   });
 
@@ -172,7 +171,7 @@ provider.switchMap('amap');
 
       const error = await errorPromise;
       expect(error.type).toBe('amap');
-      expect(error.message).toContain('Failed to load Amap');
+      expect(error.message).toContain('Network error');
     });
   });
 
@@ -200,9 +199,7 @@ provider.updateCamera({
 
   describe('clearError', () => {
     it('应该清除错误 UI', async () => {
-      await provider.switchMap('amap');
-
-      expect(mockContainer.innerHTML).not.toBe('');
+      mockContainer.innerHTML = '<div>error</div>';
 
       provider.clearError('amap');
 

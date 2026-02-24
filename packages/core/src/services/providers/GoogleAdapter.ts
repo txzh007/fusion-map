@@ -9,16 +9,19 @@ import {
   normalizeHeading,
   PROVIDER_CAMERA_POLICIES
 } from './cameraPolicies';
+import { createTokenMissingError } from '../../errors';
 
 export class GoogleAdapter extends ThirdPartyMapAdapter<any> {
   async load(view: CameraView | undefined, context: ThirdPartyLoadContext): Promise<any> {
     const key = context.tokens.google;
     if (!key) {
-      throw new Error('Token is required for Google Maps provider');
+      throw createTokenMissingError('Google Maps');
     }
 
     if (!(window as any).google || !(window as any).google.maps) {
-      await context.loadScript(`https://maps.googleapis.com/maps/api/js?key=${key}&v=beta&libraries=geometry,places`);
+      await context.loadScript(
+        `https://maps.googleapis.com/maps/api/js?key=${key}&v=beta&libraries=geometry,places&loading=async`
+      );
     }
 
     const div = document.createElement('div');
@@ -51,7 +54,7 @@ export class GoogleAdapter extends ThirdPartyMapAdapter<any> {
       center = { lat: view.center[1], lng: view.center[0] };
       zoom = view.zoom + PROVIDER_CAMERA_POLICIES.google.zoomOffset + context.zoomOffset;
       tilt = view.pitch;
-      heading = normalizeHeading(-view.bearing);
+      heading = normalizeHeading(view.bearing);
     }
 
     tilt = this.clampPitchForZoom(tilt, zoom);

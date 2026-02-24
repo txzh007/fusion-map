@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { FusionMap } from '../FusionMap';
 import { Container } from '../di/Container';
 import { BaseMapProvider } from '../services/BaseMapProvider';
+import { ErrorCode } from '../errors';
 
 describe('FusionMap: Error Handling', () => {
   let mockContainer: HTMLElement;
@@ -72,7 +73,7 @@ describe('FusionMap: Error Handling', () => {
       }
 
       const error = await errorPromise;
-      expect(error.message).toContain('切换到 amap 失败');
+      expect(error.message).toContain('Failed to switch to amap');
     });
 
     it('应该订阅加载状态事件', async () => {
@@ -126,8 +127,9 @@ describe('FusionMap: Error Handling', () => {
         // 预期会抛出错误
       }
 
-const error = await errorPromise;
+      const error = await errorPromise;
       expect(error.message).toContain('Failed to switch to amap');
+      expect((error.error as any)?.code).toBe(ErrorCode.UNKNOWN_ERROR);
 
       switchMapSpy.mockRestore();
     });
@@ -181,7 +183,7 @@ const error = await errorPromise;
 
       fusionMap.destroy();
 
-const error = await errorPromise;
+      const error = await errorPromise;
       expect(error.message).toContain('Failed to destroy map');
     });
   });

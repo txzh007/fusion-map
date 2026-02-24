@@ -14,6 +14,7 @@ const REFERENCE_BASE_LAYER_ID = 'maplibre-reference-base-layer';
 const REFERENCE_BG_LAYER_ID = 'maplibre-reference-bg-layer';
 const REFERENCE_BASE_OPACITY = 0.5;
 const DEFAULT_MAX_PITCH = 67.5;
+const TOKEN_REQUIRED_MAPS: MapType[] = ['amap', 'baidu', 'google', 'tianditu'];
 
 @MapService()
 export class FusionMap {
@@ -214,7 +215,12 @@ export class FusionMap {
     this.syncEngine.bind(this.map);
 
     // 4. 初始化默认底图（支持配置初始底图）
-    const initialBaseMap = options.initialBaseMap ?? 'amap';
+    const initialBaseMap = this.resolveInitialBaseMap(options);
+    if (!initialBaseMap) {
+      console.warn('[FusionMap] No provider token configured, skipping initial base map bootstrap.');
+      return;
+    }
+
     const initialCenter = this.map.getCenter();
     const initialView = {
       center: [initialCenter.lng, initialCenter.lat] as [number, number],
@@ -227,6 +233,7 @@ export class FusionMap {
       .switchMap(initialBaseMap, initialView)
       .then(() => {
         this.applyBaseMapPresentation(initialBaseMap);
+        this.syncCurrentViewToBaseMap();
         return;
       })
       .catch((error) => {
@@ -240,6 +247,37 @@ export class FusionMap {
       });
 
     console.log('[FusionMap] Ready.');
+  }
+
+  private resolveInitialBaseMap(options: FusionMapConfig): MapType | null {
+    if (options.initialBaseMap) {
+      return options.initialBaseMap;
+    }
+
+    const candidates: MapType[] = ['amap', 'baidu', 'google', 'tianditu'];
+    const firstConfigured = candidates.find((type) => this.hasRequiredToken(type, options));
+    return firstConfigured ?? null;
+  }
+
+  private hasRequiredToken(type: MapType, options: FusionMapConfig): boolean {
+    if (!TOKEN_REQUIRED_MAPS.includes(type)) {
+      return true;
+    }
+
+    const tokens = options.tokens;
+    if (!tokens) {
+      return false;
+    }
+
+    if (type === 'google') {
+      return Boolean(tokens.google);
+    }
+
+    if (type === 'tianditu') {
+      return Boolean(tokens.tianditu);
+    }
+
+    return Boolean(tokens[type]);
   }
 
   // 切换投影
@@ -462,6 +500,7 @@ export class FusionMap {
       .then(() => {
         this.loadingSubject.next({ type, loading: false });
         this.applyBaseMapPresentation(type);
+        this.syncCurrentViewToBaseMap();
         return;
       })
       .catch((error) => {
@@ -482,6 +521,20 @@ export class FusionMap {
     this.map.setMaxPitch(this.maxPitchLimit);
     this.map.dragRotate.enable();
     this.map.touchZoomRotate.enableRotation();
+  }
+
+  private syncCurrentViewToBaseMap() {
+    if (!this.map) {
+      return;
+    }
+
+    const center = this.map.getCenter();
+    this.baseMapProvider.updateCamera({
+      center: [center.lng, center.lat],
+      zoom: this.map.getZoom(),
+      pitch: this.map.getPitch(),
+      bearing: this.map.getBearing()
+    });
   }
 
   // 访问底层 MapLibre 实例（只读）

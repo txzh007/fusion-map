@@ -6,12 +6,13 @@ import {
   type ThirdPartyLoadContext
 } from './ThirdPartyMapAdapter';
 import { normalizeHeading, PROVIDER_CAMERA_POLICIES } from './cameraPolicies';
+import { createTokenMissingError } from '../../errors';
 
 export class AmapAdapter extends ThirdPartyMapAdapter<any> {
   async load(view: CameraView | undefined, context: ThirdPartyLoadContext): Promise<any> {
     const key = context.tokens.amap;
     if (!key) {
-      throw new Error('Token is required for Amap map provider');
+      throw createTokenMissingError('Amap');
     }
 
     const callbackName = 'amapInitCallback';

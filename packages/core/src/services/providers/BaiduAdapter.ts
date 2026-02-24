@@ -6,12 +6,13 @@ import {
   type ThirdPartyLoadContext
 } from './ThirdPartyMapAdapter';
 import { PROVIDER_CAMERA_POLICIES, resolveBaiduHeading } from './cameraPolicies';
+import { createTokenMissingError } from '../../errors';
 
 export class BaiduAdapter extends ThirdPartyMapAdapter<any> {
   async load(view: CameraView | undefined, context: ThirdPartyLoadContext): Promise<any> {
     const key = context.tokens.baidu;
     if (!key) {
-      throw new Error('Token is required for Baidu map provider');
+      throw createTokenMissingError('Baidu');
     }
 
     const url = `https://api.map.baidu.com/api?type=webgl&v=1.0&ak=${key}&callback=bmapInitCallback`;

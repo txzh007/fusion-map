@@ -102,7 +102,9 @@ export class Container {
    * 解析依赖
    */
   private static resolveDependencies(paramTypes: any[], explicitDeps: any[]): any[] {
-    return paramTypes.map((paramType, index) => {
+    const size = Math.max(paramTypes.length, explicitDeps.length);
+    return Array.from({ length: size }, (_, index) => {
+      const paramType = paramTypes[index];
       // 如果有显式提供的依赖，使用它们
       if (explicitDeps[index] !== undefined) {
         return explicitDeps[index];

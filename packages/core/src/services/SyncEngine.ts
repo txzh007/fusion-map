@@ -8,6 +8,8 @@ export class SyncEngine {
   private map: maplibregl.Map | null = null;
   private isSyncing = false;
   private framePending = false;
+  private static readonly IMMEDIATE_SYNC_INTERVAL_MS = 8;
+  private lastImmediateSyncAt = 0;
   private static readonly BEARING_EPSILON = 0.01;
 
   @Inject(() => BaseMapProvider)
@@ -47,7 +49,17 @@ export class SyncEngine {
     }
   }
 
-  private scheduleCameraSync() {
+  private scheduleCameraSync(immediate: boolean = false) {
+    if (immediate) {
+      const now = typeof performance !== 'undefined' && typeof performance.now === 'function'
+        ? performance.now()
+        : Date.now();
+      if (now - this.lastImmediateSyncAt >= SyncEngine.IMMEDIATE_SYNC_INTERVAL_MS) {
+        this.lastImmediateSyncAt = now;
+        this.pushCameraState();
+      }
+    }
+
     if (this.framePending) {return;}
     this.framePending = true;
 
@@ -86,25 +98,25 @@ export class SyncEngine {
   @AutoBind
   onCameraMove() {
     if (!this.map) {return;}
-    this.scheduleCameraSync();
+    this.scheduleCameraSync(true);
   }
 
   @Watch('zoom')
   @AutoBind
   onZoomChange() {
     console.log('[SyncEngine] Zoom changed, adjusting LOD...');
-    this.scheduleCameraSync();
+    this.scheduleCameraSync(true);
   }
 
   @Watch('pitch')
   @AutoBind
   onPitchChange() {
-    this.scheduleCameraSync();
+    this.scheduleCameraSync(true);
   }
 
   @Watch('rotate')
   @AutoBind
   onRotateChange() {
-    this.scheduleCameraSync();
+    this.scheduleCameraSync(true);
   }
 }

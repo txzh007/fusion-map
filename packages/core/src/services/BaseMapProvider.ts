@@ -268,6 +268,10 @@ export class BaseMapProvider {
     return new Promise<void>((resolve, reject) => {
       const script = document.createElement('script');
       script.src = src;
+      // Prefer async+defer for third-party SDKs (recommended for Google Maps).
+      // This avoids blocking parser and matches best-practice loader patterns.
+      script.async = true;
+      script.defer = true;
 
       let settled = false;
       const onDone = (handler: () => void) => {
@@ -340,14 +344,14 @@ export class BaseMapProvider {
     } catch (e) {
       console.error('Failed to load Amap', e);
       this.loadingSubject.next({ type: 'amap', loading: false });
-      const error = e instanceof Error ? e : new Error(String(e));
+      const error = normalizeError(e);
       this.errorSubject.next({
         type: 'amap',
-        message: 'Failed to load Amap',
-        error,
+        message: error.message,
+        error: error.code ? error : undefined,
         timestamp: Date.now()
       });
-      this.renderError('Failed to load Amap SDK');
+      this.renderError(error.message, 'amap');
     }
   }
 
@@ -370,14 +374,14 @@ export class BaseMapProvider {
     } catch (e) {
       console.error('Failed to load Baidu', e);
       this.loadingSubject.next({ type: 'baidu', loading: false });
-      const error = e instanceof Error ? e : new Error(String(e));
+      const error = normalizeError(e);
       this.errorSubject.next({
         type: 'baidu',
-        message: 'Failed to load Baidu',
-        error,
+        message: error.message,
+        error: error.code ? error : undefined,
         timestamp: Date.now()
       });
-      this.renderError('Failed to load Baidu');
+      this.renderError(error.message, 'baidu');
     }
   }
 
@@ -448,14 +452,14 @@ export class BaseMapProvider {
     } catch (e) {
       console.error('Failed to load Cesium', e);
       this.loadingSubject.next({ type: 'cesium', loading: false });
-      const error = e instanceof Error ? e : new Error(String(e));
+      const error = normalizeError(e);
       this.errorSubject.next({
         type: 'cesium',
-        message: 'Failed to load Cesium (Network/CDN error)',
-        error,
+        message: error.message,
+        error: error.code ? error : undefined,
         timestamp: Date.now()
       });
-      this.renderError('Failed to load Cesium (Network/CDN error)', 'cesium');
+      this.renderError(error.message, 'cesium');
     }
   }
 
@@ -478,14 +482,34 @@ export class BaseMapProvider {
     if (!this.container) {
       return;
     }
-    this.container.innerHTML = `<div style="
-        display:flex;flex-direction:column;align-items:center;justify-content:center;
-        height:100%;color:#666;background:#f8f8f8;text-align:center;padding:20px;
-      ">
-      <h3>${type.toUpperCase()}</h3>
-      <p>${msg}</p>
-      <small style="color:#999">See console for details</small>
-    </div>`;
+
+    this.container.innerHTML = '';
+
+    const wrapper = document.createElement('div');
+    wrapper.style.display = 'flex';
+    wrapper.style.flexDirection = 'column';
+    wrapper.style.alignItems = 'center';
+    wrapper.style.justifyContent = 'center';
+    wrapper.style.height = '100%';
+    wrapper.style.color = '#666';
+    wrapper.style.background = '#f8f8f8';
+    wrapper.style.textAlign = 'center';
+    wrapper.style.padding = '20px';
+
+    const title = document.createElement('h3');
+    title.textContent = type.toUpperCase();
+
+    const body = document.createElement('p');
+    body.textContent = msg;
+
+    const hint = document.createElement('small');
+    hint.style.color = '#999';
+    hint.textContent = 'See console for details';
+
+    wrapper.appendChild(title);
+    wrapper.appendChild(body);
+    wrapper.appendChild(hint);
+    this.container.appendChild(wrapper);
   }
 
   /**

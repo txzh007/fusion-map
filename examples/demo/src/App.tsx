@@ -22,6 +22,8 @@ import {
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import MapIcon from '@mui/icons-material/Map';
+import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
+import KeyboardArrowRightIcon from '@mui/icons-material/KeyboardArrowRight';
 import { createFusionMap, FusionMap } from 'fusion-map';
 
 const MAP_CONTAINER_ID = 'fusion-map-host';
@@ -52,6 +54,22 @@ const apiGroups = [
 
 const defaultCenter: [number, number] = [116.512492, 39.870734];
 
+const cameraPresets: Array<{ label: string; center: [number, number]; zoom: number }> = [
+  { label: '北京', center: [116.3974, 39.9093], zoom: 11.5 },
+  { label: '上海', center: [121.4737, 31.2304], zoom: 11.5 },
+  { label: '深圳', center: [114.0579, 22.5431], zoom: 11.5 }
+];
+
+const almostEqual = (a: number, b: number, epsilon = 0.0001) => Math.abs(a - b) < epsilon;
+
+const isSameMapState = (a: MapState, b: MapState) => (
+  almostEqual(a.zoom, b.zoom) &&
+  almostEqual(a.pitch, b.pitch) &&
+  almostEqual(a.bearing, b.bearing) &&
+  almostEqual(a.center[0], b.center[0], 0.000001) &&
+  almostEqual(a.center[1], b.center[1], 0.000001)
+);
+
 const readToken = (key: string) => (typeof window === 'undefined' ? '' : localStorage.getItem(key) || '');
 
 export default function App() {
@@ -76,6 +94,13 @@ export default function App() {
     googleMapId: readToken('fm_google_map_id')
   });
   const [snackbar, setSnackbar] = useState<{ open: boolean; message: string }>({ open: false, message: '' });
+  const [apiQuery, setApiQuery] = useState('');
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>(() => {
+    return apiGroups.reduce((acc, group) => {
+      acc[group.title] = false;
+      return acc;
+    }, {} as Record<string, boolean>);
+  });
 
   useEffect(() => {
     localStorage.setItem('fm_current_map', baseMap);
@@ -91,7 +116,11 @@ export default function App() {
       ['fm_google_key', tokens.google],
       ['fm_google_map_id', tokens.googleMapId]
     ];
-    entries.forEach(([key, value]) => localStorage.setItem(key, value || ''));
+    try {
+      entries.forEach(([key, value]) => localStorage.setItem(key, value || ''));
+    } catch {
+      // ignore localStorage write failures in private mode
+    }
   }, [tokens]);
 
   useEffect(() => {
@@ -108,15 +137,34 @@ export default function App() {
       }
     });
 
+    let rafId = 0;
+    let pendingState: MapState | null = null;
+    let lastState: MapState = mapState;
+
+    const flushState = () => {
+      rafId = 0;
+      if (!pendingState || isSameMapState(pendingState, lastState)) {
+        pendingState = null;
+        return;
+      }
+      lastState = pendingState;
+      setMapState(pendingState);
+      pendingState = null;
+    };
+
     const updateState = (target: any) => {
       if (!target) return;
       const center = target.getCenter();
-      setMapState({
+      pendingState = {
         zoom: target.getZoom(),
         pitch: target.getPitch(),
         bearing: target.getBearing(),
         center: [center.lng, center.lat]
-      });
+      };
+
+      if (!rafId) {
+        rafId = window.requestAnimationFrame(flushState);
+      }
     };
 
     const attach = (type: string) => {
@@ -149,7 +197,12 @@ export default function App() {
     };
 
     syncThirdPartyCamera();
-    const thirdPartyTimer = window.setInterval(syncThirdPartyCamera, 200);
+    const thirdPartyTimer = window.setInterval(() => {
+      if (document.visibilityState === 'hidden') {
+        return;
+      }
+      syncThirdPartyCamera();
+    }, 350);
 
     mapRef.current = instance;
 
@@ -181,6 +234,9 @@ export default function App() {
     return () => {
       window.clearTimeout(initialSwitchTimer);
       window.clearInterval(thirdPartyTimer);
+      if (rafId) {
+        window.cancelAnimationFrame(rafId);
+      }
 
       try {
         if (typeof (instance as any).destroy === 'function') {
@@ -262,6 +318,44 @@ export default function App() {
     </Box>
   );
 
+  const flyToPreset = (center: [number, number], zoom: number) => {
+    const map = (mapRef.current as any)?.getMapInstance?.();
+    if (!map || typeof map.flyTo !== 'function') {
+      return;
+    }
+    map.flyTo({ center, zoom, essential: true });
+  };
+
+  const normalizedQuery = apiQuery.trim().toLowerCase();
+  const visibleApiGroups = apiGroups
+    .map((group) => {
+      if (!normalizedQuery) {
+        return group;
+      }
+
+      const groupMatched = group.title.toLowerCase().includes(normalizedQuery);
+      const items = groupMatched
+        ? group.items
+        : group.items.filter((item) => item.toLowerCase().includes(normalizedQuery));
+
+      return { ...group, items };
+    })
+    .filter((group) => group.items.length > 0);
+
+  const toggleGroup = (title: string) => {
+    setCollapsedGroups((prev) => ({ ...prev, [title]: !prev[title] }));
+  };
+
+  const toggleAllGroups = () => {
+    const hasExpanded = apiGroups.some((group) => !collapsedGroups[group.title]);
+    setCollapsedGroups(
+      apiGroups.reduce((acc, group) => {
+        acc[group.title] = hasExpanded;
+        return acc;
+      }, {} as Record<string, boolean>)
+    );
+  };
+
   return (
     <Box className="app-shell">
       <Paper elevation={1} className="panel nav-panel">
@@ -272,18 +366,52 @@ export default function App() {
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
           左侧按 API 分类，选择你要调试的能力。
         </Typography>
+        <Stack direction="row" spacing={1} sx={{ mb: 1 }}>
+          <TextField
+            size="small"
+            placeholder="搜索 API / 能力"
+            value={apiQuery}
+            onChange={(e) => setApiQuery(e.target.value)}
+            fullWidth
+          />
+          <Button size="small" variant="outlined" onClick={toggleAllGroups} disabled={Boolean(normalizedQuery)}>
+            {apiGroups.some((group) => !collapsedGroups[group.title]) ? '全部收起' : '全部展开'}
+          </Button>
+        </Stack>
         <Divider sx={{ mb: 1 }} />
         <List dense sx={{ overflowY: 'auto', flex: 1 }}>
-          {apiGroups.map(group => (
-            <Box key={group.title} sx={{ mb: 1.5 }}>
-              <Typography variant="caption" color="text.secondary" sx={{ pl: 1 }}>{group.title}</Typography>
-              {group.items.map(item => (
-                <ListItemButton key={item} className="nav-item" dense>
-                  <ListItemText primaryTypographyProps={{ fontSize: 14 }} primary={item} />
-                </ListItemButton>
-              ))}
-            </Box>
-          ))}
+          {visibleApiGroups.map(group => {
+            const collapsed = normalizedQuery ? false : Boolean(collapsedGroups[group.title]);
+            return (
+              <Box key={group.title} sx={{ mb: 1.5 }}>
+                <Stack
+                  direction="row"
+                  alignItems="center"
+                  justifyContent="space-between"
+                  sx={{ pl: 1, pr: 0.5 }}
+                >
+                  <Typography variant="caption" color="text.secondary">{group.title}</Typography>
+                  <IconButton
+                    size="small"
+                    onClick={() => toggleGroup(group.title)}
+                    disabled={Boolean(normalizedQuery)}
+                  >
+                    {collapsed ? <KeyboardArrowRightIcon fontSize="small" /> : <KeyboardArrowDownIcon fontSize="small" />}
+                  </IconButton>
+                </Stack>
+                {!collapsed && group.items.map(item => (
+                  <ListItemButton key={item} className="nav-item" dense>
+                    <ListItemText primaryTypographyProps={{ fontSize: 14 }} primary={item} />
+                  </ListItemButton>
+                ))}
+              </Box>
+            );
+          })}
+          {visibleApiGroups.length === 0 && (
+            <Typography variant="caption" color="text.secondary" sx={{ px: 1 }}>
+              未找到匹配项
+            </Typography>
+          )}
         </List>
       </Paper>
 
@@ -395,6 +523,13 @@ export default function App() {
 
           <Box>
             <Typography variant="caption" color="text.secondary">凭据</Typography>
+            <Stack direction="row" gap={0.5} sx={{ flexWrap: 'wrap', mt: 1 }}>
+              <Chip size="small" variant={tokens.amap ? 'filled' : 'outlined'} color={tokens.amap ? 'success' : 'default'} label="Amap" />
+              <Chip size="small" variant={tokens.baidu ? 'filled' : 'outlined'} color={tokens.baidu ? 'success' : 'default'} label="Baidu" />
+              <Chip size="small" variant={tokens.google ? 'filled' : 'outlined'} color={tokens.google ? 'success' : 'default'} label="Google" />
+              <Chip size="small" variant={tokens.tianditu ? 'filled' : 'outlined'} color={tokens.tianditu ? 'success' : 'default'} label="Tianditu" />
+              <Chip size="small" variant={tokens.cesium ? 'filled' : 'outlined'} color={tokens.cesium ? 'success' : 'default'} label="Cesium" />
+            </Stack>
             <Stack spacing={1} mt={1}>
               <TextField size="small" label="Amap Key" value={tokens.amap} onChange={e => setTokens(t => ({ ...t, amap: e.target.value }))} />
               <TextField size="small" label="Baidu AK" value={tokens.baidu} onChange={e => setTokens(t => ({ ...t, baidu: e.target.value }))} />
@@ -419,6 +554,24 @@ export default function App() {
               <Button variant="contained" startIcon={<RefreshIcon />} onClick={() => setSession(v => v + 1)}>
                 应用凭据并重载
               </Button>
+            </Stack>
+          </Box>
+
+          <Divider flexItem />
+
+          <Box>
+            <Typography variant="caption" color="text.secondary">快速定位</Typography>
+            <Stack direction="row" spacing={1} mt={1}>
+              {cameraPresets.map((preset) => (
+                <Button
+                  key={preset.label}
+                  variant="outlined"
+                  size="small"
+                  onClick={() => flyToPreset(preset.center, preset.zoom)}
+                >
+                  {preset.label}
+                </Button>
+              ))}
             </Stack>
           </Box>
 

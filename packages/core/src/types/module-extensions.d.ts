@@ -3,7 +3,7 @@
  */
 
 import type { IMarker, IPolyline, IOverlayManager, MarkerOptions, PolylineOptions } from './overlays';
-import type { FusionMapOverlays } from '../overlays/FusionMapExtensions';
+import type { FusionMapOverlays } from '../overlays/extensions/FusionMapExtensions';
 
 declare module '../FusionMap' {
   interface FusionMap {

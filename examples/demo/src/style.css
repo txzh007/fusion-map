@@ -71,6 +71,13 @@ body, html, #app {
   min-height: 0;
 }
 
+.code-editor {
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 8px;
+  background: #f9fafb;
+  padding: 8px;
+}
+
 @media (max-width: 1200px) {
   .app-shell {
     grid-template-columns: 240px 1fr;

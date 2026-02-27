@@ -3,7 +3,7 @@
  */
 
 import { FusionMap } from '../../FusionMap';
-import { extendFusionMapWithOverlays } from '../../overlays/FusionMapExtensions';
+import { extendFusionMapWithOverlays } from '../../overlays/extensions/FusionMapExtensions';
 import { createMarker, createPolyline } from '../../overlays';
 
 // 扩展FusionMap以支持覆盖物API

@@ -1,6 +1,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { CssBaseline, ThemeProvider, createTheme } from '@mui/material';
+import 'maplibre-gl/dist/maplibre-gl.css';
 import App from './App';
 import './style.css';
 

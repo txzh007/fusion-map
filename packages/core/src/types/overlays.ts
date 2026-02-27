@@ -320,6 +320,51 @@ export interface IPolyline extends IOverlay {
 }
 
 /**
+ * 线覆盖物模块参数
+ */
+export type LineAddOptions = PolylineOptions;
+export type LineUpdateOptions = Partial<PolylineOptions>;
+
+/**
+ * 点覆盖物模块参数
+ */
+export type PointAddOptions = MarkerOptions;
+export type PointUpdateOptions = Partial<MarkerOptions>;
+
+/**
+ * 点覆盖物模块
+ */
+export interface IPointsModule {
+  add(options: PointAddOptions): IMarker;
+  update(id: string, options: PointUpdateOptions): IMarker | null;
+  remove(id: string): boolean;
+  list(): IMarker[];
+  get(id: string): IMarker | null;
+}
+
+/**
+ * 线覆盖物模块
+ */
+export interface ILinesModule {
+  add(options: LineAddOptions): IPolyline;
+  update(id: string, options: LineUpdateOptions): IPolyline | null;
+  remove(id: string): boolean;
+  list(): IPolyline[];
+  get(id: string): IPolyline | null;
+}
+
+/**
+ * 面覆盖物模块
+ */
+export interface IPolygonsModule {
+  add(options: PolygonAddOptions): IPolygon;
+  update(id: string, options: PolygonUpdateOptions): IPolygon | null;
+  remove(id: string): boolean;
+  list(): IPolygon[];
+  get(id: string): IPolygon | null;
+}
+
+/**
  * 多边形选项
  */
 export interface PolygonOptions extends OverlayOptions {
@@ -348,6 +393,12 @@ export interface PolygonOptions extends OverlayOptions {
   /** 最大缩放可见级别 */
   maxZoom?: number;
 }
+
+/**
+ * 面覆盖物模块参数
+ */
+export type PolygonAddOptions = PolygonOptions;
+export type PolygonUpdateOptions = Partial<PolygonOptions>;
 
 /**
  * 多边形接口

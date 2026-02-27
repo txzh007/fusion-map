@@ -1,6 +1,6 @@
 # Fusion Map (fusion-map)
 
-[English](./README.md) | [简体中文](./README_zh-CN.md) | [在线演示](https://easy-map.tanxin.link/index.html)
+[English](./README.md) | [简体中文](./README_zh-CN.md) | [在线演示](https://fusion-map.tanxin.link/index.html)
 
 **Fusion Map** 是一个强大的统一地图库，它无缝桥接了 **MapLibre GL JS** 与全球主流的地图服务商，包括 **Google Maps**、**Cesium (3D 地球)**、**高德地图 (Amap)**、**百度地图 (Baidu)** 和 **天地图 (Tianditu)**。
 
@@ -47,7 +47,7 @@ graph TD
   - 在支持的平台上同步俯仰角 (Pitch) 和旋转角 (Bearing)。
   - 防止 Cesium 中的万向节死锁 (Gimbal Lock)。
 - **坐标转换**: 内置 `gcoord` 支持 WGS84, GCJ02, 和 BD09 之间的自动转换。
-- **覆盖物统一封装（规划中）**: 未来将基于 MapLibre 封装 Marker/Polyline/Polygon/Circle 等覆盖物能力，实现“**一次编写，到处运行**”的跨底图覆盖物 API。
+- **覆盖物统一封装（部分可用）**: 已提供基于 MapLibre 的 Marker/Polyline/Polygon 覆盖物封装，Circle 仍在规划中，用于实现“**一次编写，到处运行**”的跨底图覆盖物 API。
 
 ## 📦 安装
 

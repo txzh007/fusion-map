@@ -121,7 +121,7 @@ export class CoordinateUtils {
 /**
  * 覆盖物工厂
  */
-export { overlayFactory, createMarker, createPolyline } from './overlays';
+export { overlayFactory, createMarker, createPolyline, createPolygon } from './overlays';
 
 /**
  * 覆盖物管理器
@@ -144,9 +144,21 @@ export { Marker } from './overlays';
 export { Polyline } from './overlays';
 
 /**
+ * 多边形覆盖物
+ */
+export { Polygon } from './overlays';
+
+/**
+ * 点覆盖物模块
+ */
+export { PointsModule } from './overlays';
+export { LinesModule } from './overlays';
+export { PolygonsModule } from './overlays';
+
+/**
  * 覆盖物扩展
  */
-export { extendFusionMapWithOverlays } from './overlays/FusionMapExtensions';
+export { extendFusionMapWithOverlays } from './overlays/extensions/FusionMapExtensions';
 
 // ============ 覆盖物类型 ============
 

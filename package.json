@@ -6,12 +6,12 @@
     "examples/*"
   ],
   "scripts": {
-    "dev": "yarn workspace easy-map-demo dev",
+    "dev": "yarn workspace fusion-map-demo dev",
     "build:tsc": "tsc -b",
     "build": "yarn workspace fusion-map build",
     "release": "cd packages/core && npm publish --access public",
-    "build:demo": "yarn workspace easy-map-demo build",
-    "preview": "yarn workspace easy-map-demo preview",
+    "build:demo": "yarn workspace fusion-map-demo build",
+    "preview": "yarn workspace fusion-map-demo preview",
     "lint": "eslint packages/core/src --ext .ts",
     "lint:fix": "eslint packages/core/src --ext .ts --fix"
   },

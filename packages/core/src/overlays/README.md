@@ -13,8 +13,8 @@
 
 ## 当前实现状态
 
-- 已实现：`Marker`、`Polyline`、`OverlayManager`
-- 计划中：`Polygon`、`Circle`、`Rectangle`、`InfoWindow`、`GeoJSON`、`SVGOverlay`
+- 已实现：`Marker`、`Polyline`、`Polygon`、`OverlayManager`
+- 计划中：`Circle`、`Rectangle`、`InfoWindow`、`GeoJSON`、`SVGOverlay`
 
 ## 安装
 

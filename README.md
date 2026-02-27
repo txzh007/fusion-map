@@ -1,6 +1,6 @@
 # Fusion Map (fusion-map)
 
-[English](./README.md) | [简体中文](./README_zh-CN.md) | [Live Demo](https://easy-map.tanxin.link/index.html)
+[English](./README.md) | [简体中文](./README_zh-CN.md) | [Live Demo](https://fusion-map.tanxin.link/index.html)
 
 **Fusion Map** is a powerful unified mapping library that seamlessly bridges **MapLibre GL JS** with major global map providers, including **Google Maps**, **Cesium (3D Globe)**, **Amap (Gaode)**, **Baidu Map**, and **Tianditu**.
 
@@ -47,7 +47,7 @@ This means you can write your visualization code **solely using the standard Map
   - Synchronizes Pitch and Bearing (Rotation) where supported.
   - Prevents Gimbal Lock in Cesium.
 - **Coordinate Transformation**: Built-in support for WGS84, GCJ02, and BD09 conversions using `gcoord`.
-- **Unified Overlay Abstraction (Planned)**: Future MapLibre-first wrappers for Marker/Polyline/Polygon/Circle to enable true “**write once, run everywhere**” overlay APIs across providers.
+- **Unified Overlay Abstraction (Partial)**: MapLibre-first wrappers for Marker/Polyline/Polygon are available; Circle is next in plan for true “**write once, run everywhere**” overlays across providers.
 
 ## 📦 Installation
 

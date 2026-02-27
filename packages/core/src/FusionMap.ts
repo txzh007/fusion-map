@@ -149,14 +149,15 @@ export class FusionMap {
 
     this.map.on('load', () => {
       this.projectionLoadListenerBound = false;
+      this.map.resize();
 
       // Tianditu Base Map (Standard Vector)
       // Note: Requires a valid TK (Token).
       // Please replace 'YOUR_TIANDITU_KEY' with your actual key if needed, or use a working one if provided.
       if (!tdtToken) {
-        console.warn(
-          '[FusionMap] Tianditu Token is missing. Tianditu base map may not load.'
-        );
+        console.warn('[FusionMap] Tianditu Token is missing. Tianditu base map will be skipped.');
+        this.applyPendingProjection();
+        return;
       }
 
       // cvaTiles 未使用，已被注释
@@ -210,6 +211,8 @@ export class FusionMap {
 
       this.applyPendingProjection();
     });
+
+    requestAnimationFrame(() => this.map.resize());
 
     // 3. 启动同步引擎
     this.syncEngine.bind(this.map);
@@ -288,9 +291,8 @@ export class FusionMap {
 
     this.pendingProjection = type;
 
-    const isStyleLoaded = typeof (this.map as any).isStyleLoaded === 'function'
-      ? (this.map as any).isStyleLoaded()
-      : true;
+    const isStyleLoaded =
+      typeof (this.map as any).isStyleLoaded === 'function' ? (this.map as any).isStyleLoaded() : true;
 
     if (!isStyleLoaded) {
       this.bindProjectionOnLoad();
